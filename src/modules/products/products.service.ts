@@ -1,0 +1,175 @@
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../../prisma/prisma.service';
+import { PaginatedResult, PaginationDto } from '../../common/dto/pagination.dto';
+import { CreateProductDto, UpdateProductDto, CreateCategoryDto, CreateTaxDto, AddProductImageDto } from './dto';
+
+const PRODUCT_INCLUDE = {
+  categories: { include: { category: true } },
+  taxes: { include: { tax: true } },
+  variants: true,
+  images: { orderBy: { sortOrder: 'asc' as const } },
+};
+
+@Injectable()
+export class ProductsService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async create(tenantId: string, dto: CreateProductDto) {
+    const { categoryIds = [], taxIds = [], variants = [], ...data } = dto;
+    return this.prisma.db.product.create({
+      data: {
+        ...data,
+        tenantId,
+        hasVariants: variants.length > 0,
+        categories: { create: categoryIds.map((categoryId) => ({ tenantId, categoryId })) },
+        taxes: { create: taxIds.map((taxId) => ({ tenantId, taxId })) },
+        variants: { create: variants.map((v) => ({ ...v, tenantId })) },
+      } as any,
+      include: PRODUCT_INCLUDE,
+    });
+  }
+
+  async findAll(tenantId: string, pagination: PaginationDto): Promise<PaginatedResult<any>> {
+    const where = {
+      tenantId,
+      ...(pagination.search ? { name: { contains: pagination.search, mode: 'insensitive' as const } } : {}),
+    };
+    const [items, total] = await Promise.all([
+      this.prisma.db.product.findMany({
+        where,
+        include: PRODUCT_INCLUDE,
+        skip: pagination.skip,
+        take: pagination.limit,
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.db.product.count({ where }),
+    ]);
+    return {
+      items,
+      meta: { page: pagination.page, limit: pagination.limit, total, totalPages: Math.ceil(total / pagination.limit) },
+    };
+  }
+
+  async findPublished(tenantId: string, pagination: PaginationDto): Promise<PaginatedResult<any>> {
+    const where = {
+      tenantId,
+      isActive: true,
+      isPublished: true,
+      ...(pagination.search ? { name: { contains: pagination.search, mode: 'insensitive' as const } } : {}),
+    };
+    const [items, total] = await Promise.all([
+      this.prisma.db.product.findMany({
+        where,
+        include: PRODUCT_INCLUDE,
+        skip: pagination.skip,
+        take: pagination.limit,
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.db.product.count({ where }),
+    ]);
+    return {
+      items,
+      meta: { page: pagination.page, limit: pagination.limit, total, totalPages: Math.ceil(total / pagination.limit) },
+    };
+  }
+
+  async findOnePublished(tenantId: string, id: string) {
+    const product = await this.prisma.db.product.findFirst({
+      where: { id, tenantId, isActive: true, isPublished: true },
+      include: PRODUCT_INCLUDE,
+    });
+    if (!product) throw new NotFoundException('Product not found');
+    return product;
+  }
+
+  async findOne(tenantId: string, id: string) {
+    const product = await this.prisma.db.product.findFirst({ where: { id, tenantId }, include: PRODUCT_INCLUDE });
+    if (!product) throw new NotFoundException('Product not found');
+    return product;
+  }
+
+  /**
+   * Runs as a sequence of statements on `prisma.db`. When a tenant context is
+   * active (the normal case for these routes), `db` is already the per-request
+   * transaction client from TenantScopeInterceptor, so this is atomic with no
+   * nested `$transaction` needed (Prisma transaction clients don't support
+   * nesting).
+   */
+  async update(tenantId: string, id: string, dto: UpdateProductDto) {
+    await this.findOne(tenantId, id);
+    const { categoryIds, taxIds, variants, ...data } = dto;
+    const db = this.prisma.db;
+
+    if (categoryIds) {
+      await db.productCategoryOnProduct.deleteMany({ where: { productId: id } });
+      await db.productCategoryOnProduct.createMany({
+        data: categoryIds.map((categoryId) => ({ tenantId, productId: id, categoryId })),
+      });
+    }
+    if (taxIds) {
+      await db.productTaxOnProduct.deleteMany({ where: { productId: id } });
+      await db.productTaxOnProduct.createMany({
+        data: taxIds.map((taxId) => ({ tenantId, productId: id, taxId })),
+      });
+    }
+    if (variants) {
+      await db.productVariant.deleteMany({ where: { productId: id } });
+      await db.productVariant.createMany({
+        data: variants.map((v) => ({ ...v, tenantId, productId: id })),
+      });
+    }
+    return db.product.update({
+      where: { id },
+      data: { ...data, ...(variants ? { hasVariants: variants.length > 0 } : {}) } as any,
+      include: PRODUCT_INCLUDE,
+    });
+  }
+
+  async remove(tenantId: string, id: string) {
+    await this.findOne(tenantId, id);
+    await this.prisma.db.product.delete({ where: { id } });
+    return { deleted: true };
+  }
+
+  async addImage(tenantId: string, productId: string, dto: AddProductImageDto) {
+    await this.findOne(tenantId, productId);
+    if (dto.isCover) {
+      await this.prisma.db.productImage.updateMany({ where: { productId }, data: { isCover: false } });
+    }
+    return this.prisma.db.productImage.create({
+      data: { tenantId, productId, url: dto.url, isCover: dto.isCover ?? false },
+    });
+  }
+
+  async removeImage(tenantId: string, productId: string, imageId: string) {
+    await this.findOne(tenantId, productId);
+    await this.prisma.db.productImage.delete({ where: { id: imageId } });
+    return { deleted: true };
+  }
+
+  async listCategories(tenantId: string) {
+    return this.prisma.db.productCategory.findMany({ where: { tenantId }, orderBy: { name: 'asc' } });
+  }
+
+  async createCategory(tenantId: string, dto: CreateCategoryDto) {
+    return this.prisma.db.productCategory.create({ data: { tenantId, ...dto } });
+  }
+
+  async removeCategory(tenantId: string, id: string) {
+    await this.prisma.db.productCategory.delete({ where: { id } });
+    return { deleted: true };
+  }
+
+  async listTaxes(tenantId: string) {
+    return this.prisma.db.productTax.findMany({ where: { tenantId }, orderBy: { name: 'asc' } });
+  }
+
+  async createTax(tenantId: string, dto: CreateTaxDto) {
+    return this.prisma.db.productTax.create({ data: { tenantId, ...dto } });
+  }
+
+  async removeTax(tenantId: string, id: string) {
+    await this.prisma.db.productTax.delete({ where: { id } });
+    return { deleted: true };
+  }
+}
