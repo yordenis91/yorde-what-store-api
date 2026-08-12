@@ -2,9 +2,8 @@ import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@ne
 import { ApiTags } from '@nestjs/swagger';
 import { CurrentTenantId, Public, Roles } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
-import { PaginationDto } from '../../common/dto/pagination.dto';
 import { OrdersService } from './orders.service';
-import { CreateOrderDto, UpdateOrderStatusDto } from './dto';
+import { CreateOrderDto, UpdateOrderStatusDto, OrderQueryDto } from './dto';
 
 @ApiTags('storefront-orders')
 @Public()
@@ -27,8 +26,8 @@ export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   @Get()
-  findAll(@CurrentTenantId() tenantId: string, @Query() pagination: PaginationDto) {
-    return this.ordersService.findAll(tenantId, pagination);
+  findAll(@CurrentTenantId() tenantId: string, @Query() query: OrderQueryDto) {
+    return this.ordersService.findAll(tenantId, query);
   }
 
   @Get(':id')

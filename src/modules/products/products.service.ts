@@ -1,7 +1,14 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { PaginatedResult, PaginationDto } from '../../common/dto/pagination.dto';
-import { CreateProductDto, UpdateProductDto, CreateCategoryDto, CreateTaxDto, AddProductImageDto } from './dto';
+import { PaginatedResult } from '../../common/dto/pagination.dto';
+import { CreateProductDto, UpdateProductDto, CreateCategoryDto, CreateTaxDto, AddProductImageDto, ProductQueryDto } from './dto';
+
+function sortToOrderBy(sort?: string): Prisma.ProductOrderByWithRelationInput {
+  if (sort === 'price_asc') return { price: 'asc' };
+  if (sort === 'price_desc') return { price: 'desc' };
+  return { createdAt: 'desc' };
+}
 
 const PRODUCT_INCLUDE = {
   categories: { include: { category: true } },
@@ -29,47 +36,50 @@ export class ProductsService {
     });
   }
 
-  async findAll(tenantId: string, pagination: PaginationDto): Promise<PaginatedResult<any>> {
+  async findAll(tenantId: string, query: ProductQueryDto): Promise<PaginatedResult<any>> {
     const where = {
       tenantId,
-      ...(pagination.search ? { name: { contains: pagination.search, mode: 'insensitive' as const } } : {}),
+      ...(query.search ? { name: { contains: query.search, mode: 'insensitive' as const } } : {}),
+      ...(query.categoryId ? { categories: { some: { categoryId: query.categoryId } } } : {}),
+      ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
     };
     const [items, total] = await Promise.all([
       this.prisma.db.product.findMany({
         where,
         include: PRODUCT_INCLUDE,
-        skip: pagination.skip,
-        take: pagination.limit,
-        orderBy: { createdAt: 'desc' },
+        skip: query.skip,
+        take: query.limit,
+        orderBy: sortToOrderBy(query.sort),
       }),
       this.prisma.db.product.count({ where }),
     ]);
     return {
       items,
-      meta: { page: pagination.page, limit: pagination.limit, total, totalPages: Math.ceil(total / pagination.limit) },
+      meta: { page: query.page, limit: query.limit, total, totalPages: Math.ceil(total / query.limit) },
     };
   }
 
-  async findPublished(tenantId: string, pagination: PaginationDto): Promise<PaginatedResult<any>> {
+  async findPublished(tenantId: string, query: ProductQueryDto): Promise<PaginatedResult<any>> {
     const where = {
       tenantId,
       isActive: true,
       isPublished: true,
-      ...(pagination.search ? { name: { contains: pagination.search, mode: 'insensitive' as const } } : {}),
+      ...(query.search ? { name: { contains: query.search, mode: 'insensitive' as const } } : {}),
+      ...(query.categoryId ? { categories: { some: { categoryId: query.categoryId } } } : {}),
     };
     const [items, total] = await Promise.all([
       this.prisma.db.product.findMany({
         where,
         include: PRODUCT_INCLUDE,
-        skip: pagination.skip,
-        take: pagination.limit,
-        orderBy: { createdAt: 'desc' },
+        skip: query.skip,
+        take: query.limit,
+        orderBy: sortToOrderBy(query.sort),
       }),
       this.prisma.db.product.count({ where }),
     ]);
     return {
       items,
-      meta: { page: pagination.page, limit: pagination.limit, total, totalPages: Math.ceil(total / pagination.limit) },
+      meta: { page: query.page, limit: query.limit, total, totalPages: Math.ceil(total / query.limit) },
     };
   }
 
@@ -145,6 +155,13 @@ export class ProductsService {
     await this.findOne(tenantId, productId);
     await this.prisma.db.productImage.delete({ where: { id: imageId } });
     return { deleted: true };
+  }
+
+  async setCoverImage(tenantId: string, productId: string, imageId: string) {
+    await this.findOne(tenantId, productId);
+    const db = this.prisma.db;
+    await db.productImage.updateMany({ where: { productId }, data: { isCover: false } });
+    return db.productImage.update({ where: { id: imageId }, data: { isCover: true } });
   }
 
   async listCategories(tenantId: string) {

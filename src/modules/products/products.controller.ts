@@ -2,9 +2,8 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } f
 import { ApiTags } from '@nestjs/swagger';
 import { CurrentTenantId, Public, Roles } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
-import { PaginationDto } from '../../common/dto/pagination.dto';
 import { ProductsService } from './products.service';
-import { CreateProductDto, UpdateProductDto, CreateCategoryDto, CreateTaxDto, AddProductImageDto } from './dto';
+import { CreateProductDto, UpdateProductDto, CreateCategoryDto, CreateTaxDto, AddProductImageDto, ProductQueryDto } from './dto';
 
 @ApiTags('storefront-products')
 @Public()
@@ -14,13 +13,26 @@ export class StorefrontProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
   @Get()
-  findAll(@CurrentTenantId() tenantId: string, @Query() pagination: PaginationDto) {
-    return this.productsService.findPublished(tenantId, pagination);
+  findAll(@CurrentTenantId() tenantId: string, @Query() query: ProductQueryDto) {
+    return this.productsService.findPublished(tenantId, query);
   }
 
   @Get(':id')
   findOne(@CurrentTenantId() tenantId: string, @Param('id') id: string) {
     return this.productsService.findOnePublished(tenantId, id);
+  }
+}
+
+@ApiTags('storefront-categories')
+@Public()
+@UseGuards(TenantRequiredGuard)
+@Controller('storefront/categories')
+export class StorefrontCategoriesController {
+  constructor(private readonly productsService: ProductsService) {}
+
+  @Get()
+  list(@CurrentTenantId() tenantId: string) {
+    return this.productsService.listCategories(tenantId);
   }
 }
 
@@ -37,8 +49,8 @@ export class ProductsController {
   }
 
   @Get()
-  findAll(@CurrentTenantId() tenantId: string, @Query() pagination: PaginationDto) {
-    return this.productsService.findAll(tenantId, pagination);
+  findAll(@CurrentTenantId() tenantId: string, @Query() query: ProductQueryDto) {
+    return this.productsService.findAll(tenantId, query);
   }
 
   @Get('categories')
@@ -94,5 +106,10 @@ export class ProductsController {
   @Delete(':id/images/:imageId')
   removeImage(@CurrentTenantId() tenantId: string, @Param('id') id: string, @Param('imageId') imageId: string) {
     return this.productsService.removeImage(tenantId, id, imageId);
+  }
+
+  @Patch(':id/images/:imageId/cover')
+  setCoverImage(@CurrentTenantId() tenantId: string, @Param('id') id: string, @Param('imageId') imageId: string) {
+    return this.productsService.setCoverImage(tenantId, id, imageId);
   }
 }

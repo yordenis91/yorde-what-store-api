@@ -24,6 +24,11 @@ import { OrdersModule } from './modules/orders/orders.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { PlansModule } from './modules/plans/plans.module';
 import { UsersModule } from './modules/users/users.module';
+import { UploadsModule } from './modules/uploads/uploads.module';
+import { CouponsModule } from './modules/coupons/coupons.module';
+import { LocationsShippingModule } from './modules/locations-shipping/locations-shipping.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { PlatformModule } from './modules/platform/platform.module';
 import { QueueModule } from './queue/queue.module';
 
 import { AppController } from './app.controller';
@@ -67,6 +72,11 @@ import { AppService } from './app.service';
     PaymentsModule,
     PlansModule,
     UsersModule,
+    UploadsModule,
+    CouponsModule,
+    LocationsShippingModule,
+    DashboardModule,
+    PlatformModule,
   ],
   controllers: [AppController],
   providers: [

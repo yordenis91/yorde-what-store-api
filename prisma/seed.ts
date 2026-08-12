@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
 
@@ -15,6 +16,22 @@ async function main() {
       await prisma.plan.create({ data: plan as any });
       console.log(`Created plan: ${plan.name}`);
     }
+  }
+
+  const superAdminEmail = process.env.SUPER_ADMIN_EMAIL ?? 'superadmin@yws.dev';
+  const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD ?? 'SuperAdmin123!';
+  const existingSuperAdmin = await prisma.user.findUnique({ where: { email: superAdminEmail } });
+  if (!existingSuperAdmin) {
+    const passwordHash = await bcrypt.hash(superAdminPassword, 12);
+    await prisma.user.create({
+      data: { email: superAdminEmail, name: 'Super Admin', passwordHash, globalRole: 'SUPER_ADMIN' },
+    });
+    console.log(`Created SUPER_ADMIN user: ${superAdminEmail} / ${superAdminPassword}`);
+  } else if (existingSuperAdmin.globalRole !== 'SUPER_ADMIN') {
+    await prisma.user.update({ where: { id: existingSuperAdmin.id }, data: { globalRole: 'SUPER_ADMIN' } });
+    console.log(`Promoted existing user to SUPER_ADMIN: ${superAdminEmail}`);
+  } else {
+    console.log(`SUPER_ADMIN user already exists: ${superAdminEmail}`);
   }
 }
 

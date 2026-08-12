@@ -41,6 +41,12 @@ export class PlansController {
   }
 
   @Roles('SUPER_ADMIN')
+  @Get('admin/upgrade-requests')
+  listUpgradeRequests() {
+    return this.plansService.listUpgradeRequests();
+  }
+
+  @Roles('SUPER_ADMIN')
   @Post(':id/approve-upgrade')
   approveUpgrade(@Param('id') subscriptionId: string) {
     return this.plansService.approveUpgrade(subscriptionId);

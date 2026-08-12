@@ -3,8 +3,8 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
-import { PaginatedResult, PaginationDto } from '../../common/dto/pagination.dto';
-import { CreateOrderDto } from './dto';
+import { PaginatedResult } from '../../common/dto/pagination.dto';
+import { CreateOrderDto, OrderQueryDto } from './dto';
 import { applyCouponDiscount, priceLineItem, round2 } from './pricing.util';
 import { buildWhatsappUrl, renderItemLine, renderOrderMessage } from './fulfillment/message-renderer';
 import { ORDER_NOTIFICATION_QUEUE } from '../../queue/queue.constants';
@@ -164,24 +164,33 @@ export class OrdersService {
     return { order, fulfillment: { type: 'TELEGRAM' as const, queued: true } };
   }
 
-  async findAll(tenantId: string, pagination: PaginationDto): Promise<PaginatedResult<any>> {
+  async findAll(tenantId: string, query: OrderQueryDto): Promise<PaginatedResult<any>> {
     const where = {
       tenantId,
-      ...(pagination.search ? { orderNumber: { contains: pagination.search, mode: 'insensitive' as const } } : {}),
+      ...(query.search ? { orderNumber: { contains: query.search, mode: 'insensitive' as const } } : {}),
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.dateFrom || query.dateTo
+        ? {
+            createdAt: {
+              ...(query.dateFrom ? { gte: new Date(query.dateFrom) } : {}),
+              ...(query.dateTo ? { lte: new Date(query.dateTo) } : {}),
+            },
+          }
+        : {}),
     };
     const [items, total] = await Promise.all([
       this.prisma.db.order.findMany({
         where,
         include: ORDER_INCLUDE,
-        skip: pagination.skip,
-        take: pagination.limit,
+        skip: query.skip,
+        take: query.limit,
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.db.order.count({ where }),
     ]);
     return {
       items,
-      meta: { page: pagination.page, limit: pagination.limit, total, totalPages: Math.ceil(total / pagination.limit) },
+      meta: { page: query.page, limit: query.limit, total, totalPages: Math.ceil(total / query.limit) },
     };
   }
 

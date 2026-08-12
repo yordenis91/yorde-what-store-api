@@ -50,6 +50,16 @@ export class AuthService {
           members: { create: { userId: user.id, role: 'OWNER' } },
         },
       });
+
+      // New tenants start on the cheapest active plan (Free tier) so `requestUpgrade`
+      // always has a baseline subscription to move from.
+      const defaultPlan = await tx.plan.findFirst({ where: { isActive: true }, orderBy: { price: 'asc' } });
+      if (defaultPlan) {
+        await tx.subscription.create({
+          data: { tenantId: tenant.id, planId: defaultPlan.id, status: 'ACTIVE' },
+        });
+      }
+
       return { user, tenant };
     });
 
@@ -150,6 +160,11 @@ export class AuthService {
       });
     }
     return { loggedOut: true };
+  }
+
+  async getProfile(userId: string) {
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    return this.sanitizeUser(user);
   }
 
   async setupTwoFactor(userId: string) {

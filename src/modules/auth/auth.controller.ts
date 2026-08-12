@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Get,
   Post,
   Req,
   Res,
@@ -60,6 +61,11 @@ export class AuthController {
     const tokens: TokenPair = await this.authService.refresh(token);
     this.setRefreshCookie(res, tokens.refreshToken);
     return { accessToken: tokens.accessToken };
+  }
+
+  @Get('me')
+  me(@CurrentUser() user: AuthenticatedUser) {
+    return this.authService.getProfile(user.id);
   }
 
   @Post('logout')

@@ -69,6 +69,28 @@ export class PlansService {
     });
   }
 
+  async listUpgradeRequests() {
+    const requests = await this.prisma.subscription.findMany({
+      where: { status: 'PENDING_UPGRADE' },
+      include: { tenant: { select: { id: true, name: true, slug: true } }, plan: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const requestedPlanIds = [...new Set(requests.map((r) => r.requestedPlanId).filter((id): id is string => !!id))];
+    const requestedPlans = requestedPlanIds.length
+      ? await this.prisma.plan.findMany({ where: { id: { in: requestedPlanIds } } })
+      : [];
+    const requestedPlanById = new Map(requestedPlans.map((p) => [p.id, p]));
+
+    return requests.map((r) => ({
+      id: r.id,
+      tenant: r.tenant,
+      currentPlan: r.plan,
+      requestedPlan: r.requestedPlanId ? requestedPlanById.get(r.requestedPlanId) : null,
+      createdAt: r.createdAt,
+    }));
+  }
+
   async approveUpgrade(subscriptionId: string) {
     const subscription = await this.prisma.subscription.findUniqueOrThrow({ where: { id: subscriptionId } });
     if (!subscription.requestedPlanId) throw new BadRequestException('No pending upgrade request');
