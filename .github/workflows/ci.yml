@@ -32,8 +32,63 @@ jobs:
       - name: Build
         run: npm run build
 
-      # The suite runs entirely against test doubles. Nothing here talks to
-      # Postgres or Redis, so no service containers are needed — see the
-      # "What these tests do not cover" note in README.md.
-      - name: Test
+      # Entirely against test doubles. No Postgres or Redis needed.
+      - name: Unit test
         run: npm test
+
+  e2e:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: yws_test
+          POSTGRES_PASSWORD: yws_test
+          POSTGRES_DB: yws_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    # GitHub's postgres service image runs as its own image's default user,
+    # which already has CREATEDB/superuser-equivalent rights inside the
+    # container — but the test suite's whole point is that the app's own role
+    # must NOT bypass RLS. That is enforced by yws_test being created without
+    # SUPERUSER (see the Postgres init below), not by anything in this job
+    # config.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Strip SUPERUSER from the test role
+        run: |
+          PGPASSWORD=yws_test psql -h localhost -U yws_test -d yws_test \
+            -c "ALTER ROLE yws_test NOSUPERUSER;"
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: postgresql://yws_test:yws_test@localhost:5432/yws_test?schema=public
+
+      - name: e2e test
+        run: npm run test:e2e
