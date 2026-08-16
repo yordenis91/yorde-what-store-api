@@ -3,7 +3,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { CurrentTenantId, Public, Roles } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
 import { OrdersService } from './orders.service';
-import { CreateOrderDto, UpdateOrderStatusDto, OrderQueryDto } from './dto';
+import { CreateOrderDto, UpdateOrderStatusDto, OrderQueryDto, QuoteOrderDto } from './dto';
 
 @ApiTags('storefront-orders')
 @Public()
@@ -15,6 +15,12 @@ export class StorefrontOrdersController {
   @Post()
   create(@CurrentTenantId() tenantId: string, @Body() dto: CreateOrderDto) {
     return this.ordersService.create(tenantId, dto);
+  }
+
+  /** Totals for the checkout page, priced by the same code that creates orders. */
+  @Post('quote')
+  quote(@CurrentTenantId() tenantId: string, @Body() dto: QuoteOrderDto) {
+    return this.ordersService.quote(tenantId, dto);
   }
 }
 

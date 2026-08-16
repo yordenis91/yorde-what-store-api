@@ -4,7 +4,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PaginatedResult } from '../../common/dto/pagination.dto';
-import { CreateOrderDto, OrderQueryDto } from './dto';
+import { CreateOrderDto, OrderItemInputDto, OrderQueryDto, QuoteOrderDto } from './dto';
 import { applyCouponDiscount, priceLineItem, round2 } from './pricing.util';
 import { buildWhatsappUrl, renderItemLine, renderOrderMessage } from './fulfillment/message-renderer';
 import { ORDER_NOTIFICATION_QUEUE } from '../../queue/queue.constants';
@@ -21,52 +21,8 @@ export class OrdersService {
   async create(tenantId: string, dto: CreateOrderDto) {
     const tenant = await this.prisma.db.tenant.findUniqueOrThrow({ where: { id: tenantId } });
 
-    const productIds = dto.items.map((i) => i.productId);
-    const products = await this.prisma.db.product.findMany({
-      where: { id: { in: productIds }, tenantId },
-      include: { taxes: { include: { tax: true } }, variants: true },
-    });
-    const productMap = new Map(products.map((p) => [p.id, p]));
-
-    const pricedLines = dto.items.map((item) => {
-      const product = productMap.get(item.productId);
-      if (!product) throw new BadRequestException(`Product ${item.productId} not found`);
-
-      const variant = item.variantId ? product.variants.find((v) => v.id === item.variantId) : undefined;
-      if (item.variantId && !variant) throw new BadRequestException(`Variant ${item.variantId} not found`);
-
-      const unitPrice = Number(variant?.price ?? product.price);
-      const taxes = product.taxes.map((t) => ({ name: t.tax.name, rate: Number(t.tax.rate) }));
-      const priced = priceLineItem(unitPrice, item.quantity, taxes);
-
-      return { product, variant, priced };
-    });
-
-    const subtotal = round2(pricedLines.reduce((sum, l) => sum + l.priced.lineSubtotal, 0));
-    const taxTotal = round2(pricedLines.reduce((sum, l) => sum + l.priced.taxAmount, 0));
-
-    let coupon = null;
-    let discountTotal = 0;
-    if (dto.couponCode) {
-      coupon = await this.prisma.db.coupon.findFirst({
-        where: { tenantId, code: dto.couponCode, isActive: true },
-      });
-      if (!coupon) throw new BadRequestException('Invalid or expired coupon');
-      if (coupon.expiresAt && coupon.expiresAt < new Date()) throw new BadRequestException('Coupon expired');
-      if (coupon.usageLimit != null && coupon.usageCount >= coupon.usageLimit) {
-        throw new BadRequestException('Coupon usage limit reached');
-      }
-      discountTotal = applyCouponDiscount(subtotal + taxTotal, coupon.discountType, Number(coupon.discountValue));
-    }
-
-    let shippingTotal = 0;
-    if (dto.shippingId) {
-      const shipping = await this.prisma.db.shipping.findFirst({ where: { id: dto.shippingId, tenantId } });
-      if (!shipping) throw new BadRequestException('Invalid shipping option');
-      shippingTotal = Number(shipping.cost);
-    }
-
-    const grandTotal = round2(subtotal + taxTotal - discountTotal + shippingTotal);
+    const { pricedLines, coupon, totals } = await this.priceOrder(tenantId, dto);
+    const { subtotal, taxTotal, discountTotal, shippingTotal, grandTotal } = totals;
     const orderNumber = this.generateOrderNumber();
 
     const order = await this.prisma.db.order.create({
@@ -116,6 +72,117 @@ export class OrdersService {
     }
 
     return { order, fulfillment: { type: 'STRIPE' as const } };
+  }
+
+  /**
+   * Prices a basket. The single place order totals are computed, so the quote a
+   * customer is shown and the order they are charged cannot drift apart.
+   *
+   * `lenientCoupon` is for quoting: an unusable code yields totals with no
+   * discount plus a reason, instead of denying the customer any total at all.
+   * Order creation leaves it off, so a bad code is rejected outright.
+   */
+  private async priceOrder(
+    tenantId: string,
+    input: { items: OrderItemInputDto[]; couponCode?: string; shippingId?: string },
+    options: { lenientCoupon?: boolean } = {},
+  ) {
+    const productIds = input.items.map((i) => i.productId);
+    const products = await this.prisma.db.product.findMany({
+      where: { id: { in: productIds }, tenantId },
+      include: { taxes: { include: { tax: true } }, variants: true },
+    });
+    const productMap = new Map(products.map((p) => [p.id, p]));
+
+    const pricedLines = input.items.map((item) => {
+      const product = productMap.get(item.productId);
+      if (!product) throw new BadRequestException(`Product ${item.productId} not found`);
+
+      const variant = item.variantId ? product.variants.find((v) => v.id === item.variantId) : undefined;
+      if (item.variantId && !variant) throw new BadRequestException(`Variant ${item.variantId} not found`);
+
+      const unitPrice = Number(variant?.price ?? product.price);
+      const taxes = product.taxes.map((t) => ({ name: t.tax.name, rate: Number(t.tax.rate) }));
+      const priced = priceLineItem(unitPrice, item.quantity, taxes);
+
+      return { product, variant, priced };
+    });
+
+    const subtotal = round2(pricedLines.reduce((sum, l) => sum + l.priced.lineSubtotal, 0));
+    const taxTotal = round2(pricedLines.reduce((sum, l) => sum + l.priced.taxAmount, 0));
+
+    let coupon: Awaited<ReturnType<typeof this.prisma.db.coupon.findFirst>> = null;
+    let discountTotal = 0;
+    let couponError: string | null = null;
+    if (input.couponCode) {
+      // Codes are stored uppercase; matching raw input used to accept a code at
+      // validation and then reject the same code at order creation.
+      const code = input.couponCode.trim().toUpperCase();
+      const found = await this.prisma.db.coupon.findFirst({ where: { tenantId, code, isActive: true } });
+
+      const reason = !found
+        ? 'Invalid or expired coupon'
+        : found.expiresAt && found.expiresAt < new Date()
+          ? 'Coupon expired'
+          : found.usageLimit != null && found.usageCount >= found.usageLimit
+            ? 'Coupon usage limit reached'
+            : null;
+
+      if (reason) {
+        if (!options.lenientCoupon) throw new BadRequestException(reason);
+        couponError = reason;
+      } else {
+        coupon = found;
+        discountTotal = applyCouponDiscount(subtotal + taxTotal, found!.discountType, Number(found!.discountValue));
+      }
+    }
+
+    let shippingTotal = 0;
+    let shipping = null;
+    if (input.shippingId) {
+      shipping = await this.prisma.db.shipping.findFirst({ where: { id: input.shippingId, tenantId } });
+      if (!shipping) throw new BadRequestException('Invalid shipping option');
+      shippingTotal = Number(shipping.cost);
+    }
+
+    const grandTotal = round2(subtotal + taxTotal - discountTotal + shippingTotal);
+
+    return {
+      pricedLines,
+      coupon,
+      couponError,
+      shipping,
+      totals: { subtotal, taxTotal, discountTotal, shippingTotal, grandTotal },
+    };
+  }
+
+  /**
+   * Read-only pricing for the checkout page. Same code path as order creation,
+   * minus the write and the coupon usage increment.
+   */
+  async quote(tenantId: string, dto: QuoteOrderDto) {
+    const tenant = await this.prisma.db.tenant.findUniqueOrThrow({ where: { id: tenantId } });
+    const { pricedLines, coupon, couponError, shipping, totals } = await this.priceOrder(tenantId, dto, {
+      lenientCoupon: true,
+    });
+
+    return {
+      currency: tenant.currency,
+      ...totals,
+      coupon: coupon ? { code: coupon.code, discountType: coupon.discountType } : null,
+      couponError,
+      shipping: shipping ? { id: shipping.id, name: shipping.name, cost: Number(shipping.cost) } : null,
+      items: pricedLines.map(({ product, variant, priced }) => ({
+        productId: product.id,
+        variantId: variant?.id ?? null,
+        name: product.name,
+        variantName: variant?.name ?? null,
+        unitPrice: priced.unitPrice,
+        quantity: priced.quantity,
+        taxAmount: priced.taxAmount,
+        lineTotal: priced.lineTotal,
+      })),
+    };
   }
 
   private async dispatchMessageFulfillment(tenant: any, order: any, pricedLines: any[]) {
