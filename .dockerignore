@@ -1,0 +1,17 @@
+node_modules
+dist
+coverage
+.git
+.gitignore
+.env
+.env.local
+uploads
+test
+*.log
+.DS_Store
+.vscode
+.idea
+Dockerfile
+.dockerignore
+docker-compose.yml
+DEPLOY.md

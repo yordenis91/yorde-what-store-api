@@ -20,7 +20,8 @@
     "prisma:migrate": "prisma migrate deploy",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "prisma:seed": "ts-node prisma/seed.ts"
+    "prisma:seed": "ts-node prisma/seed.ts",
+    "prisma:seed:prod": "node dist-seed/seed.js"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
