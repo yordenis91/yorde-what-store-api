@@ -1,0 +1,45 @@
+# Local development dependencies. Ports match .env.example and are deliberately
+# offset from the defaults (5433/6380) so they don't collide with other projects
+# running Postgres or Redis on the same machine.
+#
+#   docker compose up -d
+#   npm run prisma:migrate && npm run prisma:seed
+#   npm run start:dev
+#
+# Production is deployed through EasyPanel, which provides its own managed
+# Postgres and Redis — see DEPLOY.md. This file is not used there.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: yws
+      POSTGRES_PASSWORD: yws_dev_password
+      POSTGRES_DB: yws_dev
+    ports:
+      - '5433:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U yws -d yws_dev']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - '6380:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -36,7 +36,15 @@ export class UpdateTenantDto {
 
   @IsOptional()
   @IsString()
+  bannerUrl?: string;
+
+  @IsOptional()
+  @IsString()
   theme?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  tracksInventory?: boolean;
 
   @IsOptional()
   @IsBoolean()

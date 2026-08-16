@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Services import the generated client's types, so nothing compiles
+      # without this. It reads the schema only — no database connection.
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Build
+        run: npm run build
+
+      # The suite runs entirely against test doubles. Nothing here talks to
+      # Postgres or Redis, so no service containers are needed — see the
+      # "What these tests do not cover" note in README.md.
+      - name: Test
+        run: npm test
