@@ -36,6 +36,10 @@ export class UpdateTenantDto {
 
   @IsOptional()
   @IsString()
+  bannerUrl?: string;
+
+  @IsOptional()
+  @IsString()
   theme?: string;
 
   @IsOptional()

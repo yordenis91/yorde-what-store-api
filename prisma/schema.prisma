@@ -179,6 +179,9 @@ model Tenant {
 
   logoUrl        String? @map("logo_url")
   invoiceLogoUrl String? @map("invoice_logo_url")
+  /// Wide image behind the storefront header. Null falls back to a gradient
+  /// derived from the store's theme.
+  bannerUrl      String? @map("banner_url")
   theme          String  @default("default")
 
   whatsappEnabled Boolean @default(false) @map("whatsapp_enabled")
