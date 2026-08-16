@@ -44,6 +44,10 @@ export class UpdateTenantDto {
 
   @IsOptional()
   @IsBoolean()
+  tracksInventory?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
   whatsappEnabled?: boolean;
 
   @IsOptional()

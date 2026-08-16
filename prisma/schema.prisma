@@ -177,6 +177,12 @@ model Tenant {
   locale                 String  @default("en")
   timezone               String  @default("UTC")
 
+  /// Whether product quantities are real stock. Off by default because
+  /// `quantity` defaults to 0: a store that never touches it would otherwise
+  /// have every product read as sold out. When on, orders are rejected if they
+  /// exceed stock and accepted orders decrement it.
+  tracksInventory Boolean @default(false) @map("tracks_inventory")
+
   logoUrl        String? @map("logo_url")
   invoiceLogoUrl String? @map("invoice_logo_url")
   /// Wide image behind the storefront header. Null falls back to a gradient

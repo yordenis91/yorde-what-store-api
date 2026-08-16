@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -10,6 +10,13 @@ import { buildWhatsappUrl, renderItemLine, renderOrderMessage } from './fulfillm
 import { ORDER_NOTIFICATION_QUEUE } from '../../queue/queue.constants';
 
 const ORDER_INCLUDE = { items: true, coupon: true, shipping: true };
+
+/** The parts of a priced line that stock handling needs. */
+interface PricedLine {
+  product: { id: string; name: string; quantity: number };
+  variant?: { id: string; name: string; quantity: number };
+  priced: { quantity: number };
+}
 
 @Injectable()
 export class OrdersService {
@@ -23,6 +30,12 @@ export class OrdersService {
 
     const { pricedLines, coupon, totals } = await this.priceOrder(tenantId, dto);
     const { subtotal, taxTotal, discountTotal, shippingTotal, grandTotal } = totals;
+
+    // Before anything is written. TenantScopeInterceptor runs the whole request
+    // in one transaction, so a rejection here rolls back any stock already
+    // taken by earlier lines of the same order.
+    if (tenant.tracksInventory) await this.reserveStock(pricedLines);
+
     const orderNumber = this.generateOrderNumber();
 
     const order = await this.prisma.db.order.create({
@@ -157,6 +170,56 @@ export class OrdersService {
   }
 
   /**
+   * Takes stock for each line, or rejects the order.
+   *
+   * The check and the decrement are one conditional UPDATE per line
+   * (`WHERE quantity >= n`) rather than a read followed by a write: two
+   * customers buying the last unit at the same moment would both pass a
+   * read-then-write check and oversell. A row that no longer satisfies the
+   * condition updates nothing, which is how insufficient stock is detected.
+   */
+  private async reserveStock(pricedLines: PricedLine[]) {
+    for (const { product, variant, priced } of pricedLines) {
+      const taken = variant
+        ? await this.prisma.db.productVariant.updateMany({
+            where: { id: variant.id, quantity: { gte: priced.quantity } },
+            data: { quantity: { decrement: priced.quantity } },
+          })
+        : await this.prisma.db.product.updateMany({
+            where: { id: product.id, quantity: { gte: priced.quantity } },
+            data: { quantity: { decrement: priced.quantity } },
+          });
+
+      if (taken.count === 0) {
+        const available = variant ? variant.quantity : product.quantity;
+        const label = variant ? `${product.name} (${variant.name})` : product.name;
+        throw new ConflictException(
+          available > 0
+            ? `Only ${available} left of ${label}`
+            : `${label} is out of stock`,
+        );
+      }
+    }
+  }
+
+  /** Returns stock to the shelf. Used when an order is cancelled. */
+  private async releaseStock(items: { productId: string | null; variantId: string | null; quantity: number }[]) {
+    for (const item of items) {
+      if (item.variantId) {
+        await this.prisma.db.productVariant.updateMany({
+          where: { id: item.variantId },
+          data: { quantity: { increment: item.quantity } },
+        });
+      } else if (item.productId) {
+        await this.prisma.db.product.updateMany({
+          where: { id: item.productId },
+          data: { quantity: { increment: item.quantity } },
+        });
+      }
+    }
+  }
+
+  /**
    * Read-only pricing for the checkout page. Same code path as order creation,
    * minus the write and the coupon usage increment.
    */
@@ -166,8 +229,23 @@ export class OrdersService {
       lenientCoupon: true,
     });
 
+    // Reported, not enforced: the checkout can warn before the customer fills
+    // in three steps, but only order creation decides.
+    const stockIssues = tenant.tracksInventory
+      ? pricedLines
+          .filter(({ product, variant, priced }) => (variant ? variant.quantity : product.quantity) < priced.quantity)
+          .map(({ product, variant, priced }) => ({
+            productId: product.id,
+            variantId: variant?.id ?? null,
+            name: variant ? `${product.name} (${variant.name})` : product.name,
+            requested: priced.quantity,
+            available: variant ? variant.quantity : product.quantity,
+          }))
+      : [];
+
     return {
       currency: tenant.currency,
+      stockIssues,
       ...totals,
       coupon: coupon ? { code: coupon.code, discountType: coupon.discountType } : null,
       couponError,
@@ -268,7 +346,15 @@ export class OrdersService {
   }
 
   async updateStatus(tenantId: string, id: string, status: string) {
-    await this.findOne(tenantId, id);
+    const order = await this.findOne(tenantId, id);
+
+    // Cancelling frees what the order took. Guarded on the current status so
+    // cancelling an already-cancelled order doesn't credit the stock twice.
+    if (status === 'CANCELLED' && order.status !== 'CANCELLED') {
+      const tenant = await this.prisma.db.tenant.findUniqueOrThrow({ where: { id: tenantId } });
+      if (tenant.tracksInventory) await this.releaseStock(order.items);
+    }
+
     return this.prisma.db.order.update({ where: { id }, data: { status: status as any } });
   }
 

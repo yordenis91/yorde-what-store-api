@@ -37,6 +37,7 @@ export class TenantsService {
         logoUrl: true,
         bannerUrl: true,
         theme: true,
+        tracksInventory: true,
         currency: true,
         currencySymbol: true,
         currencySymbolPosition: true,
