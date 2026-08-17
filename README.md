@@ -63,6 +63,30 @@ npm run test:e2e
 `test/setup-env.ts` loads it and pins `connection_limit=1` on `DATABASE_URL`
 before the app boots.
 
+#### Local setup (this repo's docker-compose)
+
+This repo's `docker-compose.yml` maps Postgres to host port **5433**, not the
+default 5432 (avoids clashing with other projects' Postgres on this machine).
+`test/setup-env.ts` falls back to port 5432 (matching CI's service container),
+so local runs need `TEST_DATABASE_URL` pointed at 5433 — done for you by
+`npm run test:e2e:local`. One-time setup, against the container already
+started by `docker compose up`:
+
+```bash
+export PGPASSWORD='yws_dev_password'
+psql -U yws -h 127.0.0.1 -p 5433 -d postgres -c \
+  "CREATE ROLE yws_test LOGIN PASSWORD 'yws_test' NOSUPERUSER;"
+psql -U yws -h 127.0.0.1 -p 5433 -d postgres -c "CREATE DATABASE yws_test OWNER yws_test;"
+# CREATE DATABASE assigns the DB owner but not the public schema's owner —
+# fix both, or `prisma migrate deploy` below fails with a permissions error.
+psql -U yws -h 127.0.0.1 -p 5433 -d yws_test -c "ALTER SCHEMA public OWNER TO yws_test;"
+
+DATABASE_URL="postgresql://yws_test:yws_test@127.0.0.1:5433/yws_test?schema=public" \
+  npx prisma migrate deploy
+
+npm run test:e2e:local
+```
+
 **Why the role must not be a superuser:** Postgres superusers bypass Row Level
 Security unconditionally, regardless of policy or `FORCE ROW LEVEL SECURITY`.
 A superuser test role would make every isolation test pass whether or not RLS
