@@ -16,6 +16,7 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test:e2e:local": "TEST_DATABASE_URL=\"postgresql://yws_test:yws_test@127.0.0.1:5433/yws_test?schema=public&connection_limit=1\" jest --config ./test/jest-e2e.json",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "prisma:migrate:dev": "prisma migrate dev",
