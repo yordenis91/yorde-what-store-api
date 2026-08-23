@@ -43,9 +43,7 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: yws_test
-          POSTGRES_PASSWORD: yws_test
-          POSTGRES_DB: yws_test
+          POSTGRES_PASSWORD: postgres
         ports:
           - 5432:5432
         options: >-
@@ -63,12 +61,19 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
-    # GitHub's postgres service image runs as its own image's default user,
-    # which already has CREATEDB/superuser-equivalent rights inside the
-    # container — but the test suite's whole point is that the app's own role
-    # must NOT bypass RLS. That is enforced by yws_test being created without
-    # SUPERUSER (see the Postgres init below), not by anything in this job
-    # config.
+    # The postgres service starts with its default bootstrap user (`postgres`)
+    # rather than POSTGRES_USER: yws_test, on purpose. An earlier version of
+    # this job set POSTGRES_USER: yws_test and then ran
+    # `ALTER ROLE yws_test NOSUPERUSER`, which always failed —
+    # "permission denied to alter role: the bootstrap user must have the
+    # SUPERUSER attribute". Postgres hard-blocks ever revoking SUPERUSER from
+    # whichever role initdb designated as bootstrap, specifically so an
+    # instance can never end up with zero superusers; no privilege level gets
+    # around that. It silently never worked in CI even though a local run
+    # against a role created by hand (never having been the bootstrap role)
+    # passed fine — the step below creates yws_test as a brand new role
+    # instead, which sidesteps the restriction entirely because it was never
+    # the bootstrap user to begin with.
     steps:
       - uses: actions/checkout@v4
 
@@ -80,10 +85,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Strip SUPERUSER from the test role
+      - name: Create non-superuser test role
         run: |
-          PGPASSWORD=yws_test psql -h localhost -U yws_test -d yws_test \
-            -c "ALTER ROLE yws_test NOSUPERUSER;"
+          PGPASSWORD=postgres psql -h localhost -U postgres \
+            -c "CREATE ROLE yws_test LOGIN PASSWORD 'yws_test' NOSUPERUSER;" \
+            -c "CREATE DATABASE yws_test OWNER yws_test;"
 
       - name: Apply migrations
         run: npx prisma migrate deploy

@@ -90,10 +90,14 @@ npm run test:e2e:local
 **Why the role must not be a superuser:** Postgres superusers bypass Row Level
 Security unconditionally, regardless of policy or `FORCE ROW LEVEL SECURITY`.
 A superuser test role would make every isolation test pass whether or not RLS
-actually worked — false confidence in exactly the thing being tested. (CI's
-Postgres service container starts its user as a superuser by default; the
-workflow explicitly strips that with `ALTER ROLE ... NOSUPERUSER` before
-running migrations.)
+actually worked — false confidence in exactly the thing being tested. CI's
+Postgres service container boots with its default bootstrap user (`postgres`)
+rather than `yws_test`, specifically so `yws_test` can be created fresh as a
+plain non-superuser role — Postgres refuses to ever `ALTER ROLE ...
+NOSUPERUSER` the bootstrap role itself (a hard-coded protection against an
+instance ending up with zero superusers), so setting `POSTGRES_USER: yws_test`
+and then trying to strip it, which an earlier version of this workflow did,
+always fails.
 
 **Why `connection_limit=1` in the test database URL:** it forces every request
 in a test to share Prisma's one physical connection, so a bug that only shows
