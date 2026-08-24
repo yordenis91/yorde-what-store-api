@@ -28,6 +28,7 @@
     "seed": "ts-node prisma/seed.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1116.0",
     "@nest-lab/throttler-storage-redis": "^1.1.0",
     "@nestjs/bullmq": "^10.2.3",
     "@nestjs/common": "^10.4.15",
@@ -37,6 +38,7 @@
     "@nestjs/mapped-types": "^2.0.6",
     "@nestjs/passport": "^10.0.3",
     "@nestjs/platform-express": "^10.4.15",
+    "@nestjs/schedule": "^4.1.2",
     "@nestjs/swagger": "^7.4.2",
     "@nestjs/throttler": "^6.3.0",
     "@prisma/client": "^5.22.0",
@@ -45,6 +47,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "cookie-parser": "^1.4.7",
+    "cron": "3.2.1",
     "helmet": "^8.0.0",
     "ioredis": "^5.4.2",
     "nest-winston": "^1.9.7",

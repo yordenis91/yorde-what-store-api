@@ -35,6 +35,24 @@ ENV NODE_ENV=production
 RUN apt-get update && apt-get install -y --no-install-recommends openssl \
     && rm -rf /var/lib/apt/lists/*
 
+# postgresql-client-16, pinned to match the Postgres major version used
+# everywhere else in this stack (docker-compose, CI's postgres:16-alpine,
+# every migration). Debian's own default repo ships an older client
+# (bookworm defaults to 15) — close enough for plain SQL, but pg_dump's
+# custom format (what BackupsService uses) is less forgiving of a
+# client/server major-version gap on restore, so this pulls the exact
+# version from the official PGDG apt repo instead of gambling on Debian's.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail \
+       https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    && . /etc/os-release \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+       > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client-16 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY package.json package-lock.json ./
 COPY prisma ./prisma
 

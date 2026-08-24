@@ -48,3 +48,31 @@ export const totpConfig = registerAs('totp', () => ({
 export const securityConfig = registerAs('security', () => ({
   encryptionKey: process.env.ENCRYPTION_KEY ?? process.env.JWT_SECRET ?? 'insecure-dev-key',
 }));
+
+/**
+ * Off-box Postgres backups. Absent bucket/credentials means the feature is
+ * inert rather than broken — BackupsService checks `isConfigured` and skips
+ * its scheduled run instead of failing, the same pattern used elsewhere for
+ * genuinely optional integrations (PRERENDER_UPSTREAM, Stripe).
+ */
+export const backupConfig = registerAs('backup', () => ({
+  cron: process.env.BACKUP_CRON ?? '0 3 * * *',
+  retentionCount: parseInt(process.env.BACKUP_RETENTION_COUNT ?? '14', 10),
+  /**
+   * Deliberately NOT the app's own DATABASE_URL. Every tenant-scoped table has
+   * FORCE ROW LEVEL SECURITY, which Postgres enforces on `COPY tablename TO`
+   * for any role without the BYPASSRLS attribute — no exception for the
+   * table owner, no exception for what a policy's USING clause would allow.
+   * The app's runtime role deliberately lacks BYPASSRLS (that's the whole
+   * point of the RLS e2e suite); granting it there to make backups work would
+   * quietly undo that guarantee for every request, not just this job. This
+   * needs its own role, created once with BYPASSRLS — see DEPLOY.md.
+   */
+  databaseUrl: process.env.BACKUP_DATABASE_URL,
+  s3Endpoint: process.env.BACKUP_S3_ENDPOINT,
+  s3Bucket: process.env.BACKUP_S3_BUCKET,
+  s3Region: process.env.BACKUP_S3_REGION ?? 'auto',
+  s3AccessKeyId: process.env.BACKUP_S3_ACCESS_KEY_ID,
+  s3SecretAccessKey: process.env.BACKUP_S3_SECRET_ACCESS_KEY,
+  s3Prefix: process.env.BACKUP_S3_PREFIX ?? 'postgres',
+}));

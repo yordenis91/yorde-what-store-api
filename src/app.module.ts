@@ -4,6 +4,7 @@ import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { BullModule } from '@nestjs/bullmq';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
+import { ScheduleModule } from '@nestjs/schedule';
 import { WinstonModule } from 'nest-winston';
 import Redis from 'ioredis';
 
@@ -16,6 +17,7 @@ import {
   mailConfig,
   totpConfig,
   securityConfig,
+  backupConfig,
 } from './config';
 import { winstonLoggerOptions } from './logger/winston.config';
 
@@ -42,6 +44,7 @@ import { CouponsModule } from './modules/coupons/coupons.module';
 import { LocationsShippingModule } from './modules/locations-shipping/locations-shipping.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { PlatformModule } from './modules/platform/platform.module';
+import { BackupsModule } from './modules/backups/backups.module';
 import { QueueModule } from './queue/queue.module';
 
 import { AppController } from './app.controller';
@@ -52,8 +55,19 @@ import { AppService } from './app.service';
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: ['.env.local', '.env'],
-      load: [appConfig, jwtConfig, jwtCustomerConfig, redisConfig, stripeConfig, mailConfig, totpConfig, securityConfig],
+      load: [
+        appConfig,
+        jwtConfig,
+        jwtCustomerConfig,
+        redisConfig,
+        stripeConfig,
+        mailConfig,
+        totpConfig,
+        securityConfig,
+        backupConfig,
+      ],
     }),
+    ScheduleModule.forRoot(),
     WinstonModule.forRoot(winstonLoggerOptions),
     BullModule.forRootAsync({
       useFactory: () => ({
@@ -94,6 +108,7 @@ import { AppService } from './app.service';
     LocationsShippingModule,
     DashboardModule,
     PlatformModule,
+    BackupsModule,
   ],
   controllers: [AppController],
   providers: [
