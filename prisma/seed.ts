@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { SEED_TEMPLATES, TEMPLATE_KEYS } from '../src/modules/email-templates/default-templates';
 
 const prisma = new PrismaClient();
 
@@ -32,6 +33,25 @@ async function main() {
     console.log(`Promoted existing user to SUPER_ADMIN: ${superAdminEmail}`);
   } else {
     console.log(`SUPER_ADMIN user already exists: ${superAdminEmail}`);
+  }
+
+  // email_templates has an RLS policy that only lets a tenant-scoped write
+  // (app.tenant_id set) touch its own rows — a platform-wide default row
+  // (tenant_id NULL) can only be written with app.bypass_rls set, same as
+  // PrismaService.withRlsBypass() does for the app's own runtime code. This
+  // seed script uses a bare PrismaClient, so it has to set that GUC itself.
+  for (const key of TEMPLATE_KEYS) {
+    for (const locale of ['en', 'es'] as const) {
+      const { subject, body } = SEED_TEMPLATES[key][locale];
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
+        const existing = await tx.emailTemplate.findFirst({ where: { tenantId: null, key, locale } });
+        if (!existing) {
+          await tx.emailTemplate.create({ data: { tenantId: null, key, locale, subject, body } });
+          console.log(`Created default email template: ${key} (${locale})`);
+        }
+      });
+    }
   }
 }
 

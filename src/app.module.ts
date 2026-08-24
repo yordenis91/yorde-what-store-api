@@ -7,7 +7,16 @@ import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis'
 import { WinstonModule } from 'nest-winston';
 import Redis from 'ioredis';
 
-import { appConfig, jwtConfig, redisConfig, stripeConfig, mailConfig, totpConfig, securityConfig } from './config';
+import {
+  appConfig,
+  jwtConfig,
+  jwtCustomerConfig,
+  redisConfig,
+  stripeConfig,
+  mailConfig,
+  totpConfig,
+  securityConfig,
+} from './config';
 import { winstonLoggerOptions } from './logger/winston.config';
 
 import { PrismaModule } from './prisma/prisma.module';
@@ -25,6 +34,9 @@ import { PreviewModule } from './modules/preview/preview.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { PlansModule } from './modules/plans/plans.module';
 import { UsersModule } from './modules/users/users.module';
+import { CustomersModule } from './modules/customers/customers.module';
+import { VisitsModule } from './modules/visits/visits.module';
+import { EmailTemplatesModule } from './modules/email-templates/email-templates.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
 import { CouponsModule } from './modules/coupons/coupons.module';
 import { LocationsShippingModule } from './modules/locations-shipping/locations-shipping.module';
@@ -40,7 +52,7 @@ import { AppService } from './app.service';
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: ['.env.local', '.env'],
-      load: [appConfig, jwtConfig, redisConfig, stripeConfig, mailConfig, totpConfig, securityConfig],
+      load: [appConfig, jwtConfig, jwtCustomerConfig, redisConfig, stripeConfig, mailConfig, totpConfig, securityConfig],
     }),
     WinstonModule.forRoot(winstonLoggerOptions),
     BullModule.forRootAsync({
@@ -74,6 +86,9 @@ import { AppService } from './app.service';
     PaymentsModule,
     PlansModule,
     UsersModule,
+    CustomersModule,
+    VisitsModule,
+    EmailTemplatesModule,
     UploadsModule,
     CouponsModule,
     LocationsShippingModule,

@@ -4,6 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { EMAIL_QUEUE } from '../../queue/queue.constants';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { EmailJobData } from '../../queue/processors/email.processor';
 import { InviteStaffDto, UpdateMemberDto } from './dto';
 
 const BCRYPT_ROUNDS = 12;
@@ -40,11 +41,14 @@ export class UsersService {
       data: { tenantId, userId: user.id, role: 'STAFF', permissions: dto.permissions ?? [] },
     });
 
+    const tenant = await this.prisma.db.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { name: true, locale: true } });
     await this.emailQueue.add('staff-invite', {
-      email: dto.email,
-      name: dto.name,
-      temporaryPassword: dto.temporaryPassword,
-    });
+      templateKey: 'staff-invite',
+      tenantId,
+      locale: tenant.locale,
+      to: dto.email,
+      variables: { name: dto.name, store_name: tenant.name, temporary_password: dto.temporaryPassword },
+    } satisfies EmailJobData);
 
     return membership;
   }

@@ -14,6 +14,14 @@ export const jwtConfig = registerAs('jwt', () => ({
   refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? '30d',
 }));
 
+/** Separate secrets from `jwt.*` so a leaked customer token can never be replayed against staff routes. */
+export const jwtCustomerConfig = registerAs('jwtCustomer', () => ({
+  secret: process.env.JWT_CUSTOMER_SECRET,
+  expiresIn: process.env.JWT_CUSTOMER_EXPIRES_IN ?? '15m',
+  refreshSecret: process.env.JWT_CUSTOMER_REFRESH_SECRET,
+  refreshExpiresIn: process.env.JWT_CUSTOMER_REFRESH_EXPIRES_IN ?? '30d',
+}));
+
 export const redisConfig = registerAs('redis', () => ({
   host: process.env.REDIS_HOST ?? 'localhost',
   port: parseInt(process.env.REDIS_PORT ?? '6379', 10),

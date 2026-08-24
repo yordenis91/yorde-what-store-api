@@ -7,7 +7,8 @@ import { PaginatedResult } from '../../common/dto/pagination.dto';
 import { CreateOrderDto, OrderItemInputDto, OrderQueryDto, QuoteOrderDto } from './dto';
 import { applyCouponDiscount, priceLineItem, round2 } from './pricing.util';
 import { buildWhatsappUrl, renderItemLine, renderOrderMessage } from './fulfillment/message-renderer';
-import { ORDER_NOTIFICATION_QUEUE } from '../../queue/queue.constants';
+import { EMAIL_QUEUE, ORDER_NOTIFICATION_QUEUE } from '../../queue/queue.constants';
+import { EmailJobData } from '../../queue/processors/email.processor';
 
 const ORDER_INCLUDE = { items: true, coupon: true, shipping: true };
 
@@ -23,9 +24,10 @@ export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     @InjectQueue(ORDER_NOTIFICATION_QUEUE) private readonly notificationQueue: Queue,
+    @InjectQueue(EMAIL_QUEUE) private readonly emailQueue: Queue,
   ) {}
 
-  async create(tenantId: string, dto: CreateOrderDto) {
+  async create(tenantId: string, dto: CreateOrderDto, customerId?: string) {
     const tenant = await this.prisma.db.tenant.findUniqueOrThrow({ where: { id: tenantId } });
 
     const { pricedLines, coupon, totals } = await this.priceOrder(tenantId, dto);
@@ -42,6 +44,7 @@ export class OrdersService {
       data: {
         tenantId,
         orderNumber,
+        customerId,
         customerName: dto.customerName,
         customerEmail: dto.customerEmail,
         customerPhone: dto.customerPhone,
@@ -78,6 +81,24 @@ export class OrdersService {
 
     if (coupon) {
       await this.prisma.db.coupon.update({ where: { id: coupon.id }, data: { usageCount: { increment: 1 } } });
+    }
+
+    // Additional to whatever fulfillment channel below — WhatsApp/Telegram already
+    // notify the tenant, but an email gives the customer their own paper trail
+    // that survives losing the confirmation page or the WhatsApp thread.
+    if (order.customerEmail) {
+      await this.emailQueue.add('order-confirmation', {
+        templateKey: 'order-confirmation',
+        tenantId,
+        locale: tenant.locale,
+        to: order.customerEmail,
+        variables: {
+          customer_name: order.customerName,
+          store_name: tenant.name,
+          order_no: order.orderNumber,
+          grand_total: `${tenant.currencySymbol}${Number(order.grandTotal).toFixed(2)}`,
+        },
+      } satisfies EmailJobData);
     }
 
     if (dto.fulfillmentMethod === 'WHATSAPP' || dto.fulfillmentMethod === 'TELEGRAM') {

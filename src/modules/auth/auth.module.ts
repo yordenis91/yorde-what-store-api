@@ -20,6 +20,12 @@ import { JwtStrategy } from './strategies/jwt.strategy';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],
-  exports: [AuthService],
+  // JwtModule re-exported so other modules (customers) share this one JwtService
+  // instance instead of registering their own — two JwtModule registrations in
+  // the graph make `app.get(JwtService)` ambiguous about which default secret
+  // it resolves to. Safe here because every .sign()/.verify() call in this
+  // codebase passes its own explicit `secret`, so no module ever relies on
+  // JwtModule's own default.
+  exports: [AuthService, JwtModule],
 })
 export class AuthModule {}

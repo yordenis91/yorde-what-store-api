@@ -2,19 +2,22 @@ import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@ne
 import { ApiTags } from '@nestjs/swagger';
 import { CurrentTenantId, Public, Roles } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
+import { CurrentCustomerId } from '../customers/decorators/current-customer-id.decorator';
+import { OptionalCustomerAuthGuard } from '../customers/guards/optional-customer-auth.guard';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto, UpdateOrderStatusDto, OrderQueryDto, QuoteOrderDto } from './dto';
 
 @ApiTags('storefront-orders')
 @Public()
-@UseGuards(TenantRequiredGuard)
+@UseGuards(TenantRequiredGuard, OptionalCustomerAuthGuard)
 @Controller('storefront/orders')
 export class StorefrontOrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
+  /** `customerId` comes only from a verified token (OptionalCustomerAuthGuard) — never client-supplied, so it can't be spoofed onto someone else's account. Absent for guest checkout. */
   @Post()
-  create(@CurrentTenantId() tenantId: string, @Body() dto: CreateOrderDto) {
-    return this.ordersService.create(tenantId, dto);
+  create(@CurrentTenantId() tenantId: string, @Body() dto: CreateOrderDto, @CurrentCustomerId() customerId?: string) {
+    return this.ordersService.create(tenantId, dto, customerId);
   }
 
   /** Totals for the checkout page, priced by the same code that creates orders. */

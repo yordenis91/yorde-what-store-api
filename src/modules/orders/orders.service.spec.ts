@@ -2,7 +2,7 @@ import { ConflictException, BadRequestException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getQueueToken } from '@nestjs/bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
-import { ORDER_NOTIFICATION_QUEUE } from '../../queue/queue.constants';
+import { EMAIL_QUEUE, ORDER_NOTIFICATION_QUEUE } from '../../queue/queue.constants';
 import { OrdersService } from './orders.service';
 
 /**
@@ -54,6 +54,8 @@ function createPrismaDouble(options: {
     id: TENANT_ID,
     name: 'Test Store',
     currency: 'USD',
+    currencySymbol: '$',
+    locale: 'en',
     tracksInventory: false,
     whatsappEnabled: false,
     telegramEnabled: false,
@@ -108,6 +110,7 @@ async function buildService(double: ReturnType<typeof createPrismaDouble>) {
       OrdersService,
       { provide: PrismaService, useValue: { db: double.db, tenant: double.db.tenant } },
       { provide: getQueueToken(ORDER_NOTIFICATION_QUEUE), useValue: { add: jest.fn() } },
+      { provide: getQueueToken(EMAIL_QUEUE), useValue: { add: jest.fn() } },
     ],
   }).compile();
 

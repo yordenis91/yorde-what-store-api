@@ -40,3 +40,12 @@ export async function seedProduct(
     tx.product.create({ data: { tenantId, isPublished: true, ...overrides } }),
   );
 }
+
+/** Customers are RLS-scoped, same reasoning as seedProduct. `passwordHash` is a fixed bcrypt hash of "password123". */
+export async function seedCustomer(
+  prisma: PrismaService,
+  tenantId: string,
+  overrides: { email: string; name: string; passwordHash: string },
+) {
+  return prisma.withTenant(tenantId, (tx) => tx.customer.create({ data: { tenantId, ...overrides } }));
+}

@@ -72,22 +72,22 @@ enum PaymentProvider {
 
 /// Platform-wide account. Tenant-level role (Owner/Staff) lives on TenantMember.
 model User {
-  id               String   @id @default(uuid()) @db.Uuid
-  email            String   @unique
-  passwordHash     String   @map("password_hash")
+  id               String     @id @default(uuid()) @db.Uuid
+  email            String     @unique
+  passwordHash     String     @map("password_hash")
   name             String
   phone            String?
   globalRole       GlobalRole @default(USER) @map("global_role")
-  twoFactorEnabled Boolean  @default(false) @map("two_factor_enabled")
-  totpSecret       String?  @map("totp_secret")
-  isActive         Boolean  @default(true) @map("is_active")
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  twoFactorEnabled Boolean    @default(false) @map("two_factor_enabled")
+  totpSecret       String?    @map("totp_secret")
+  isActive         Boolean    @default(true) @map("is_active")
+  createdAt        DateTime   @default(now()) @map("created_at")
+  updatedAt        DateTime   @updatedAt @map("updated_at")
 
-  memberships   TenantMember[]
-  refreshTokens RefreshToken[]
+  memberships    TenantMember[]
+  refreshTokens  RefreshToken[]
   passwordResets PasswordResetToken[]
-  ownedTenants  Tenant[]        @relation("TenantOwner")
+  ownedTenants   Tenant[]             @relation("TenantOwner")
 
   @@map("users")
 }
@@ -149,12 +149,42 @@ model Customer {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  orders Order[]
+  tenant         Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orders         Order[]
+  refreshTokens  CustomerRefreshToken[]
+  passwordResets CustomerPasswordResetToken[]
 
   @@unique([tenantId, email])
   @@index([tenantId])
   @@map("customers")
+}
+
+model CustomerRefreshToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  customerId String    @map("customer_id") @db.Uuid
+  tokenHash  String    @map("token_hash")
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("customer_refresh_tokens")
+}
+
+model CustomerPasswordResetToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  customerId String    @map("customer_id") @db.Uuid
+  tokenHash  String    @map("token_hash")
+  expiresAt  DateTime  @map("expires_at")
+  usedAt     DateTime? @map("used_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("customer_password_reset_tokens")
 }
 
 // ---------------------------------------------------------------------------
@@ -162,20 +192,20 @@ model Customer {
 // ---------------------------------------------------------------------------
 
 model Tenant {
-  id           String   @id @default(uuid()) @db.Uuid
-  ownerId      String   @map("owner_id") @db.Uuid
+  id           String  @id @default(uuid()) @db.Uuid
+  ownerId      String  @map("owner_id") @db.Uuid
   name         String
-  slug         String   @unique
-  subdomain    String?  @unique
-  customDomain String?  @unique @map("custom_domain")
+  slug         String  @unique
+  subdomain    String? @unique
+  customDomain String? @unique @map("custom_domain")
   tagline      String?
-  about        String?  @db.Text
+  about        String? @db.Text
 
-  currency               String  @default("USD")
-  currencySymbol         String  @default("$") @map("currency_symbol")
-  currencySymbolPosition String  @default("pre") @map("currency_symbol_position")
-  locale                 String  @default("en")
-  timezone               String  @default("UTC")
+  currency               String @default("USD")
+  currencySymbol         String @default("$") @map("currency_symbol")
+  currencySymbolPosition String @default("pre") @map("currency_symbol_position")
+  locale                 String @default("en")
+  timezone               String @default("UTC")
 
   /// Whether product quantities are real stock. Off by default because
   /// `quantity` defaults to 0: a store that never touches it would otherwise
@@ -190,16 +220,16 @@ model Tenant {
   bannerUrl      String? @map("banner_url")
   theme          String  @default("default")
 
-  whatsappEnabled Boolean @default(false) @map("whatsapp_enabled")
-  whatsappNumber  String? @map("whatsapp_number")
-  telegramEnabled Boolean @default(false) @map("telegram_enabled")
+  whatsappEnabled  Boolean @default(false) @map("whatsapp_enabled")
+  whatsappNumber   String? @map("whatsapp_number")
+  telegramEnabled  Boolean @default(false) @map("telegram_enabled")
   telegramBotToken String? @map("telegram_bot_token")
-  telegramChatId  String? @map("telegram_chat_id")
+  telegramChatId   String? @map("telegram_chat_id")
 
   /// Templated order message with placeholders: {store_name} {order_no} {item_variable}
   /// {sub_total} {discount_amount} {shipping_amount} {item_tax} {item_total}
-  orderMessageTemplate String  @default("") @map("order_message_template") @db.Text
-  itemLineTemplate     String  @default("{sku} : {quantity} x {product_name} - {variant_name} + {item_tax} = {item_total}") @map("item_line_template")
+  orderMessageTemplate String @default("") @map("order_message_template") @db.Text
+  itemLineTemplate     String @default("{sku} : {quantity} x {product_name} - {variant_name} + {item_tax} = {item_total}") @map("item_line_template")
 
   socialLinks Json @default("{}") @map("social_links")
   settings    Json @default("{}")
@@ -208,20 +238,20 @@ model Tenant {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  owner              User                   @relation("TenantOwner", fields: [ownerId], references: [id])
-  members            TenantMember[]
-  customers          Customer[]
-  categories         ProductCategory[]
-  taxes              ProductTax[]
-  products           Product[]
-  locations          Location[]
-  shippings          Shipping[]
-  coupons            Coupon[]
-  orders             Order[]
-  paymentSettings    TenantPaymentSetting[]
-  subscriptions      Subscription[]
-  emailTemplates     EmailTemplate[]
-  visits             Visit[]
+  owner           User                   @relation("TenantOwner", fields: [ownerId], references: [id])
+  members         TenantMember[]
+  customers       Customer[]
+  categories      ProductCategory[]
+  taxes           ProductTax[]
+  products        Product[]
+  locations       Location[]
+  shippings       Shipping[]
+  coupons         Coupon[]
+  orders          Order[]
+  paymentSettings TenantPaymentSetting[]
+  subscriptions   Subscription[]
+  emailTemplates  EmailTemplate[]
+  visits          Visit[]
 
   @@map("tenants")
 }
@@ -285,7 +315,7 @@ model ProductCategory {
   tenantId String @map("tenant_id") @db.Uuid
   name     String
 
-  tenant   Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant   Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   products ProductCategoryOnProduct[]
 
   @@index([tenantId])
@@ -298,7 +328,7 @@ model ProductTax {
   name     String
   rate     Decimal @db.Decimal(6, 3)
 
-  tenant   Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   products ProductTaxOnProduct[]
 
   @@index([tenantId])
@@ -306,23 +336,23 @@ model ProductTax {
 }
 
 model Product {
-  id           String   @id @default(uuid()) @db.Uuid
-  tenantId     String   @map("tenant_id") @db.Uuid
-  name         String
-  sku          String?
-  description  String?  @db.Text
-  price        Decimal  @db.Decimal(12, 2)
-  cost         Decimal? @db.Decimal(12, 2)
-  quantity     Int      @default(0)
-  hasVariants  Boolean  @default(false) @map("has_variants")
-  isActive     Boolean  @default(true) @map("is_active")
-  isPublished  Boolean  @default(true) @map("is_published")
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  name        String
+  sku         String?
+  description String?  @db.Text
+  price       Decimal  @db.Decimal(12, 2)
+  cost        Decimal? @db.Decimal(12, 2)
+  quantity    Int      @default(0)
+  hasVariants Boolean  @default(false) @map("has_variants")
+  isActive    Boolean  @default(true) @map("is_active")
+  isPublished Boolean  @default(true) @map("is_published")
   /// Free-form extra attributes (color, size charts, custom fields) kept as JSONB.
-  attributes   Json     @default("{}")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  attributes  Json     @default("{}")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
-  tenant     Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant     Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   categories ProductCategoryOnProduct[]
   taxes      ProductTaxOnProduct[]
   variants   ProductVariant[]
@@ -406,8 +436,8 @@ model Location {
   zipcode  String?
   country  String?
 
-  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  variants ProductVariant[]
+  tenant    Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  variants  ProductVariant[]
   shippings Shipping[]
 
   @@index([tenantId])
@@ -456,24 +486,24 @@ model Coupon {
 // ---------------------------------------------------------------------------
 
 model Order {
-  id            String            @id @default(uuid()) @db.Uuid
-  tenantId      String            @map("tenant_id") @db.Uuid
-  orderNumber   String            @map("order_number")
-  customerId    String?           @map("customer_id") @db.Uuid
-  customerName  String            @map("customer_name")
-  customerEmail String?           @map("customer_email")
-  customerPhone String?           @map("customer_phone")
+  id            String  @id @default(uuid()) @db.Uuid
+  tenantId      String  @map("tenant_id") @db.Uuid
+  orderNumber   String  @map("order_number")
+  customerId    String? @map("customer_id") @db.Uuid
+  customerName  String  @map("customer_name")
+  customerEmail String? @map("customer_email")
+  customerPhone String? @map("customer_phone")
 
   status            OrderStatus       @default(PENDING)
   paymentStatus     PaymentStatus     @default(PENDING) @map("payment_status")
   fulfillmentMethod FulfillmentMethod @map("fulfillment_method")
 
-  currency       String  @default("USD")
-  subtotal       Decimal @db.Decimal(12, 2)
-  taxTotal       Decimal @default(0) @map("tax_total") @db.Decimal(12, 2)
-  discountTotal  Decimal @default(0) @map("discount_total") @db.Decimal(12, 2)
-  shippingTotal  Decimal @default(0) @map("shipping_total") @db.Decimal(12, 2)
-  grandTotal     Decimal @map("grand_total") @db.Decimal(12, 2)
+  currency      String  @default("USD")
+  subtotal      Decimal @db.Decimal(12, 2)
+  taxTotal      Decimal @default(0) @map("tax_total") @db.Decimal(12, 2)
+  discountTotal Decimal @default(0) @map("discount_total") @db.Decimal(12, 2)
+  shippingTotal Decimal @default(0) @map("shipping_total") @db.Decimal(12, 2)
+  grandTotal    Decimal @map("grand_total") @db.Decimal(12, 2)
 
   couponId   String? @map("coupon_id") @db.Uuid
   shippingId String? @map("shipping_id") @db.Uuid
@@ -501,20 +531,20 @@ model Order {
 }
 
 model OrderItem {
-  id           String   @id @default(uuid()) @db.Uuid
-  tenantId     String   @map("tenant_id") @db.Uuid
-  orderId      String   @map("order_id") @db.Uuid
-  productId    String?  @map("product_id") @db.Uuid
-  productName  String   @map("product_name")
-  variantId    String?  @map("variant_id") @db.Uuid
-  variantName  String?  @map("variant_name")
+  id           String  @id @default(uuid()) @db.Uuid
+  tenantId     String  @map("tenant_id") @db.Uuid
+  orderId      String  @map("order_id") @db.Uuid
+  productId    String? @map("product_id") @db.Uuid
+  productName  String  @map("product_name")
+  variantId    String? @map("variant_id") @db.Uuid
+  variantName  String? @map("variant_name")
   sku          String?
-  unitPrice    Decimal  @map("unit_price") @db.Decimal(12, 2)
+  unitPrice    Decimal @map("unit_price") @db.Decimal(12, 2)
   quantity     Int
-  taxAmount    Decimal  @default(0) @map("tax_amount") @db.Decimal(12, 2)
-  lineTotal    Decimal  @map("line_total") @db.Decimal(12, 2)
+  taxAmount    Decimal @default(0) @map("tax_amount") @db.Decimal(12, 2)
+  lineTotal    Decimal @map("line_total") @db.Decimal(12, 2)
   /// Snapshot of applied taxes: [{ name, rate, amount }]
-  taxBreakdown Json     @default("[]") @map("tax_breakdown")
+  taxBreakdown Json    @default("[]") @map("tax_breakdown")
 
   order   Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product Product?        @relation(fields: [productId], references: [id])
@@ -530,15 +560,15 @@ model OrderItem {
 // ---------------------------------------------------------------------------
 
 model Plan {
-  id           String       @id @default(uuid()) @db.Uuid
-  name         String
-  price        Decimal      @db.Decimal(12, 2)
-  duration     PlanDuration
-  maxStores    Int          @default(1) @map("max_stores")
-  maxProducts  Int          @default(50) @map("max_products")
-  features     Json         @default("[]")
-  isActive     Boolean      @default(true) @map("is_active")
-  createdAt    DateTime     @default(now()) @map("created_at")
+  id          String       @id @default(uuid()) @db.Uuid
+  name        String
+  price       Decimal      @db.Decimal(12, 2)
+  duration    PlanDuration
+  maxStores   Int          @default(1) @map("max_stores")
+  maxProducts Int          @default(50) @map("max_products")
+  features    Json         @default("[]")
+  isActive    Boolean      @default(true) @map("is_active")
+  createdAt   DateTime     @default(now()) @map("created_at")
 
   subscriptions Subscription[]
 
@@ -546,14 +576,14 @@ model Plan {
 }
 
 model Subscription {
-  id               String             @id @default(uuid()) @db.Uuid
-  tenantId         String             @map("tenant_id") @db.Uuid
-  planId           String             @map("plan_id") @db.Uuid
-  requestedPlanId  String?            @map("requested_plan_id") @db.Uuid
-  status           SubscriptionStatus @default(ACTIVE)
-  startedAt        DateTime           @default(now()) @map("started_at")
-  expiresAt        DateTime?          @map("expires_at")
-  createdAt        DateTime           @default(now()) @map("created_at")
+  id              String             @id @default(uuid()) @db.Uuid
+  tenantId        String             @map("tenant_id") @db.Uuid
+  planId          String             @map("plan_id") @db.Uuid
+  requestedPlanId String?            @map("requested_plan_id") @db.Uuid
+  status          SubscriptionStatus @default(ACTIVE)
+  startedAt       DateTime           @default(now()) @map("started_at")
+  expiresAt       DateTime?          @map("expires_at")
+  createdAt       DateTime           @default(now()) @map("created_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   plan   Plan   @relation(fields: [planId], references: [id])
