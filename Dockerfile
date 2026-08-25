@@ -35,13 +35,16 @@ ENV NODE_ENV=production
 RUN apt-get update && apt-get install -y --no-install-recommends openssl \
     && rm -rf /var/lib/apt/lists/*
 
-# postgresql-client-16, pinned to match the Postgres major version used
-# everywhere else in this stack (docker-compose, CI's postgres:16-alpine,
-# every migration). Debian's own default repo ships an older client
-# (bookworm defaults to 15) — close enough for plain SQL, but pg_dump's
-# custom format (what BackupsService uses) is less forgiving of a
-# client/server major-version gap on restore, so this pulls the exact
-# version from the official PGDG apt repo instead of gambling on Debian's.
+# postgresql-client-17, pinned to match the production Postgres server's
+# major version (17.11 on the EasyPanel deploy this image actually runs
+# against — docker-compose and CI still run 15/16, but those never call
+# pg_dump). Debian's own default repo ships an older client (bookworm
+# defaults to 15) — close enough for plain SQL, but pg_dump refuses outright
+# to dump a server whose major version is newer than its own: "aborting
+# because of server version mismatch". Pulling the exact version from the
+# official PGDG apt repo instead of gambling on Debian's is what makes this
+# controllable — if production's Postgres major version changes, bump the
+# "17" below to match.
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
     && install -d /usr/share/postgresql-common/pgdg \
     && curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail \
@@ -50,7 +53,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
        > /etc/apt/sources.list.d/pgdg.list \
     && apt-get update \
-    && apt-get install -y --no-install-recommends postgresql-client-16 \
+    && apt-get install -y --no-install-recommends postgresql-client-17 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
