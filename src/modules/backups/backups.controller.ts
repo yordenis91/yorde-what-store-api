@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Post } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { IsString, IsUrl } from 'class-validator';
+import { IsString, Matches } from 'class-validator';
 import { Roles } from '../../common/decorators';
 import { BackupsService } from './backups.service';
 
@@ -9,7 +9,9 @@ class RestoreBackupDto {
   key: string;
 
   /** A scratch database, never the one currently serving traffic — BackupsService.restore() refuses a match against DATABASE_URL. */
-  @IsUrl({ protocols: ['postgresql', 'postgres'], require_tld: false })
+  @Matches(/^postgre?sql:\/\/.+@.+:\d+\/.+$/, {
+    message: 'targetDatabaseUrl must be a valid PostgreSQL connection URL (postgresql://user:pass@host:port/database)',
+  })
   targetDatabaseUrl: string;
 }
 
