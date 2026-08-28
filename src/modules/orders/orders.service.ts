@@ -333,7 +333,15 @@ export class OrdersService {
   async findAll(tenantId: string, query: OrderQueryDto): Promise<PaginatedResult<any>> {
     const where = {
       tenantId,
-      ...(query.search ? { orderNumber: { contains: query.search, mode: 'insensitive' as const } } : {}),
+      ...(query.search
+        ? {
+            OR: [
+              { orderNumber: { contains: query.search, mode: 'insensitive' as const } },
+              { customerName: { contains: query.search, mode: 'insensitive' as const } },
+              { customerEmail: { contains: query.search, mode: 'insensitive' as const } },
+            ],
+          }
+        : {}),
       ...(query.status ? { status: query.status } : {}),
       ...(query.dateFrom || query.dateTo
         ? {

@@ -98,6 +98,8 @@ function createPrismaDouble(options: {
       ),
       update: jest.fn().mockResolvedValue({}),
       findFirst: jest.fn().mockResolvedValue(options.order ?? null),
+      findMany: jest.fn().mockResolvedValue([]),
+      count: jest.fn().mockResolvedValue(0),
     },
   };
 
@@ -332,6 +334,32 @@ describe('OrdersService stock', () => {
     const quote = await service.quote(TENANT_ID, { items: [{ productId: 'p1', quantity: 3 }] });
 
     expect(quote.stockIssues).toEqual([]);
+  });
+});
+
+describe('OrdersService listing', () => {
+  /**
+   * Regression: the admin orders list shows a "Customer" column right next to
+   * the search box, so a search only matching orderNumber looked broken —
+   * typing a customer's name silently returned nothing.
+   */
+  it('searches customer name and email, not just the order number', async () => {
+    const double = createPrismaDouble({});
+    const service = await buildService(double);
+
+    await service.findAll(TENANT_ID, { search: 'Bob', page: 1, limit: 20, skip: 0 } as any);
+
+    expect(double.db.order.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: [
+            { orderNumber: { contains: 'Bob', mode: 'insensitive' } },
+            { customerName: { contains: 'Bob', mode: 'insensitive' } },
+            { customerEmail: { contains: 'Bob', mode: 'insensitive' } },
+          ],
+        }),
+      }),
+    );
   });
 });
 
