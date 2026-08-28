@@ -15,7 +15,15 @@ async function bootstrap() {
     rawBody: true,
   });
   app.useLogger(app.get(WINSTON_MODULE_NEST_PROVIDER));
-  app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads' });
+  // Every upload gets a fresh randomUUID() filename (UploadsController) — a
+  // URL is never reused for different content, so it's safe to cache
+  // forever. Editing a product's photo uploads a new file under a new URL
+  // rather than overwriting this one.
+  app.useStaticAssets(join(process.cwd(), 'uploads'), {
+    prefix: '/uploads',
+    maxAge: '1y',
+    immutable: true,
+  });
 
   const config = app.get(ConfigService);
   const prefix = config.get<string>('app.prefix') ?? 'api/v1';
