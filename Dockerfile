@@ -5,7 +5,11 @@ FROM node:22-slim AS build
 WORKDIR /app
 
 # Prisma's engines are fetched by its postinstall, and need openssl present.
-RUN apt-get update && apt-get install -y --no-install-recommends openssl \
+# The retried apt-get update guards against a transient bad mirror response —
+# seen in practice as "At least one invalid signature was encountered" on a
+# Debian repo that has nothing to do with this image, gone on the next try.
+RUN (apt-get update || (sleep 5 && apt-get update) || (sleep 15 && apt-get update)) \
+    && apt-get install -y --no-install-recommends openssl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
@@ -32,7 +36,8 @@ FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
-RUN apt-get update && apt-get install -y --no-install-recommends openssl \
+RUN (apt-get update || (sleep 5 && apt-get update) || (sleep 15 && apt-get update)) \
+    && apt-get install -y --no-install-recommends openssl \
     && rm -rf /var/lib/apt/lists/*
 
 # postgresql-client-17, pinned to match the production Postgres server's
@@ -45,14 +50,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl \
 # official PGDG apt repo instead of gambling on Debian's is what makes this
 # controllable — if production's Postgres major version changes, bump the
 # "17" below to match.
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+RUN (apt-get update || (sleep 5 && apt-get update) || (sleep 15 && apt-get update)) \
+    && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
     && install -d /usr/share/postgresql-common/pgdg \
     && curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail \
        https://www.postgresql.org/media/keys/ACCC4CF8.asc \
     && . /etc/os-release \
     && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
        > /etc/apt/sources.list.d/pgdg.list \
-    && apt-get update \
+    && (apt-get update || (sleep 5 && apt-get update) || (sleep 15 && apt-get update)) \
     && apt-get install -y --no-install-recommends postgresql-client-17 \
     && rm -rf /var/lib/apt/lists/*
 
