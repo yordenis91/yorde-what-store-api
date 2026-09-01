@@ -4,6 +4,7 @@ import { CurrentTenantId, Public, Roles } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
 import { ProductsService } from './products.service';
 import { CreateProductDto, UpdateProductDto, CreateCategoryDto, CreateTaxDto, AddProductImageDto, ProductQueryDto } from './dto';
+import { CreateCategoryFromTemplateDto } from '../category-templates/dto';
 
 @ApiTags('storefront-products')
 @Public()
@@ -66,6 +67,16 @@ export class ProductsController {
   @Delete('categories/:id')
   removeCategory(@CurrentTenantId() tenantId: string, @Param('id') id: string) {
     return this.productsService.removeCategory(tenantId, id);
+  }
+
+  @Get('category-templates')
+  listCategoryTemplates() {
+    return this.productsService.listCategoryTemplates();
+  }
+
+  @Post('categories/from-template')
+  createCategoryFromTemplate(@CurrentTenantId() tenantId: string, @Body() dto: CreateCategoryFromTemplateDto) {
+    return this.productsService.createCategoryFromTemplate(tenantId, dto.templateId);
   }
 
   @Get('taxes')

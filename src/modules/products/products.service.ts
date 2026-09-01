@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PaginatedResult } from '../../common/dto/pagination.dto';
+import { CategoryTemplatesService } from '../category-templates/category-templates.service';
 import { CreateProductDto, UpdateProductDto, CreateCategoryDto, CreateTaxDto, AddProductImageDto, ProductQueryDto } from './dto';
 
 function sortToOrderBy(sort?: string): Prisma.ProductOrderByWithRelationInput {
@@ -19,7 +20,10 @@ const PRODUCT_INCLUDE = {
 
 @Injectable()
 export class ProductsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly categoryTemplatesService: CategoryTemplatesService,
+  ) {}
 
   async create(tenantId: string, dto: CreateProductDto) {
     const { categoryIds = [], taxIds = [], variants = [], ...data } = dto;
@@ -175,6 +179,29 @@ export class ProductsService {
   async removeCategory(tenantId: string, id: string) {
     await this.prisma.db.productCategory.delete({ where: { id } });
     return { deleted: true };
+  }
+
+  /** The platform's curated category catalog, for a tenant to pick from instead of typing a name from scratch. */
+  listCategoryTemplates() {
+    return this.categoryTemplatesService.listActive();
+  }
+
+  /**
+   * Turns a catalog entry into a normal, tenant-owned ProductCategory — same
+   * row shape as createCategory above, just with templateId set. Idempotent:
+   * picking the same template twice returns the category already created
+   * instead of piling up duplicates.
+   */
+  async createCategoryFromTemplate(tenantId: string, templateId: string) {
+    const template = await this.prisma.db.categoryTemplate.findFirst({ where: { id: templateId, isActive: true } });
+    if (!template) throw new NotFoundException('Category template not found');
+
+    const existing = await this.prisma.db.productCategory.findFirst({ where: { tenantId, templateId } });
+    if (existing) return existing;
+
+    return this.prisma.db.productCategory.create({
+      data: { tenantId, name: template.name, templateId },
+    });
   }
 
   async listTaxes(tenantId: string) {

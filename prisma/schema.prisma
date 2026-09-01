@@ -311,15 +311,41 @@ model EmailTemplate {
 // ---------------------------------------------------------------------------
 
 model ProductCategory {
-  id       String @id @default(uuid()) @db.Uuid
-  tenantId String @map("tenant_id") @db.Uuid
-  name     String
+  id         String  @id @default(uuid()) @db.Uuid
+  tenantId   String  @map("tenant_id") @db.Uuid
+  name       String
+  templateId String? @map("template_id") @db.Uuid
 
   tenant   Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  template CategoryTemplate?          @relation(fields: [templateId], references: [id], onDelete: SetNull)
   products ProductCategoryOnProduct[]
 
   @@index([tenantId])
+  @@index([templateId])
   @@map("product_categories")
+}
+
+// Platform-wide, tenant-less category catalog ("nomenclador de categorías") a
+// SUPER_ADMIN curates so stores aren't stuck typing free-text category names
+// from scratch. Picking one from the catalog just creates a normal
+// ProductCategory row for that tenant with templateId set — the M:N link to
+// products, storefront rendering, and every other bit of category handling
+// stays exactly as it was for freeform categories.
+model CategoryTemplate {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String   @unique
+  parentId  String?  @map("parent_id") @db.Uuid
+  sortOrder Int      @default(0) @map("sort_order")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  parent     CategoryTemplate?  @relation("CategoryTemplateChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children   CategoryTemplate[] @relation("CategoryTemplateChildren")
+  categories ProductCategory[]
+
+  @@index([parentId])
+  @@map("category_templates")
 }
 
 model ProductTax {

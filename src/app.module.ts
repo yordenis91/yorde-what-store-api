@@ -31,6 +31,7 @@ import { TenantScopeInterceptor } from './common/interceptors/tenant-scope.inter
 import { AuthModule } from './modules/auth/auth.module';
 import { TenantsModule } from './modules/tenants/tenants.module';
 import { ProductsModule } from './modules/products/products.module';
+import { CategoryTemplatesModule } from './modules/category-templates/category-templates.module';
 import { OrdersModule } from './modules/orders/orders.module';
 import { PreviewModule } from './modules/preview/preview.module';
 import { PaymentsModule } from './modules/payments/payments.module';
@@ -95,6 +96,7 @@ import { AppService } from './app.service';
     AuthModule,
     TenantsModule,
     ProductsModule,
+    CategoryTemplatesModule,
     OrdersModule,
     PreviewModule,
     PaymentsModule,

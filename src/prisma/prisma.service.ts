@@ -33,7 +33,25 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     await this.$disconnect();
   }
 
-  /** Request-scoped client: tenant-transaction-bound if available, else raw. */
+  /**
+   * Request-scoped client: tenant-transaction-bound if available, else raw.
+   *
+   * That "else raw" branch had never been exercised until a platform-only
+   * route (no tenant, so TenantScopeInterceptor never opens a transaction)
+   * called `.db` for the first time — and it turned out to be broken: Prisma
+   * 5 implements PrismaClient via a Proxy for its extensions system, and
+   * invoking a getter defined on a subclass (this one) through that Proxy
+   * does not receive `this` bound to the outer, fully-capable client — the
+   * fallback value this getter returns has no model delegates at all. Only
+   * hit when `getScopedClient`'s store is empty; the tenant-transaction path
+   * (the `tx` Prisma hands back from `$transaction`) is unaffected and is
+   * what every existing caller of `.db` runs under.
+   *
+   * Until that's root-caused, don't add a new caller that reaches `.db` with
+   * no tenant context — for a platform-global table (no tenant_id, like Plan
+   * or CategoryTemplate), query the plain `prisma.<model>` directly instead,
+   * the same way PlansService does for Plan.
+   */
   get db() {
     return getScopedClient(this);
   }
