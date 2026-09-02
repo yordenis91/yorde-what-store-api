@@ -55,6 +55,7 @@ export class OrdersService {
         customerName: dto.customerName,
         customerEmail: dto.customerEmail,
         customerPhone: dto.customerPhone,
+        sessionId: dto.sessionId,
         status: 'PENDING',
         paymentStatus: 'PENDING',
         fulfillmentMethod: dto.fulfillmentMethod,

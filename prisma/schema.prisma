@@ -277,6 +277,12 @@ model TenantPaymentSetting {
 model Visit {
   id        String   @id @default(uuid()) @db.Uuid
   tenantId  String   @map("tenant_id") @db.Uuid
+  // Anonymous, client-generated (localStorage, no PII, no cookie) — lets
+  // analytics count unique visitors and a real conversion rate (sessions
+  // that ordered / sessions seen) instead of raw pageviews. Nullable: a
+  // visitor with localStorage blocked/disabled still gets a pageview
+  // counted, just not a unique-visitor one.
+  sessionId String?  @map("session_id") @db.Uuid
   path      String
   ip        String?
   userAgent String?  @map("user_agent")
@@ -286,6 +292,7 @@ model Visit {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, createdAt])
+  @@index([tenantId, sessionId])
   @@map("visits")
 }
 
@@ -519,6 +526,10 @@ model Order {
   customerName  String  @map("customer_name")
   customerEmail String? @map("customer_email")
   customerPhone String? @map("customer_phone")
+  // Same anonymous id as Visit.sessionId, deliberately not an FK (Visit rows
+  // are purged after 60 days) — lets the dashboard join "this session
+  // browsed" to "this session bought" for a real conversion rate.
+  sessionId String? @map("session_id") @db.Uuid
 
   status            OrderStatus       @default(PENDING)
   paymentStatus     PaymentStatus     @default(PENDING) @map("payment_status")

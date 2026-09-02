@@ -13,6 +13,7 @@ export class VisitsService {
         tenantId,
         path: dto.path,
         referrer: dto.referrer,
+        sessionId: dto.sessionId,
         ip: anonymizeIp(ip),
         userAgent: userAgent?.slice(0, 300),
       },

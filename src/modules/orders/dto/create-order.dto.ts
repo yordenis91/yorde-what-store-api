@@ -59,4 +59,9 @@ export class CreateOrderDto {
   @IsOptional()
   @IsObject()
   shippingAddress?: Record<string, unknown>;
+
+  /** Same anonymous id as Visit.sessionId — lets the dashboard compute a real conversion rate. */
+  @IsOptional()
+  @IsUUID()
+  sessionId?: string;
 }

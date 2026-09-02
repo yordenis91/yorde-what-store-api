@@ -1,5 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { randomUUID } from 'crypto';
 import request from 'supertest';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { bootstrapTestApp } from './utils/bootstrap-app';
@@ -65,24 +66,25 @@ describe('Visits (e2e)', () => {
       .set('Authorization', `Bearer ${ownerToken(ownerB.id, ownerB.email, tenantB.id)}`)
       .set('X-Tenant-ID', tenantB.id)
       .expect(200);
-    expect(summaryB.body.data.totalVisits).toBe(0);
+    expect(summaryB.body.data.totalPageviews).toBe(0);
 
     const summaryA = await request(app.getHttpServer())
       .get('/api/v1/dashboard/summary')
       .set('Authorization', `Bearer ${ownerToken(ownerA.id, ownerA.email, tenantA.id)}`)
       .set('X-Tenant-ID', tenantA.id)
       .expect(200);
-    expect(summaryA.body.data.totalVisits).toBe(1);
+    expect(summaryA.body.data.totalPageviews).toBe(1);
   });
 
-  it('excludes cart/checkout/order-confirmed pages from the conversion-rate denominator', async () => {
+  it('dedupes a single session navigating the cart/checkout funnel into one unique visitor', async () => {
     const { tenant, owner } = await seedTenant(prisma, { slug: 'tenant-a' });
+    const sessionId = randomUUID();
     const paths = ['/', '/product/p1', '/cart', '/checkout', '/order-confirmed/o1'];
     for (const path of paths) {
       await request(app.getHttpServer())
         .post('/api/v1/storefront/visits')
         .set('X-Tenant-ID', tenant.id)
-        .send({ path })
+        .send({ path, sessionId })
         .expect(201);
     }
 
@@ -92,7 +94,9 @@ describe('Visits (e2e)', () => {
       .set('X-Tenant-ID', tenant.id)
       .expect(200);
 
-    // Only "/" and "/product/p1" count as entry-funnel visits.
-    expect(summary.body.data.totalVisits).toBe(2);
+    // Session-based counting means one shopper browsing the whole funnel is
+    // one unique visitor, not five — no path-exclusion hack required.
+    expect(summary.body.data.totalPageviews).toBe(5);
+    expect(summary.body.data.uniqueVisitors).toBe(1);
   });
 });
