@@ -9,6 +9,7 @@ import { applyCouponDiscount, priceLineItem, round2 } from './pricing.util';
 import { buildWhatsappUrl, renderItemLine, renderOrderMessage } from './fulfillment/message-renderer';
 import { EMAIL_QUEUE, ORDER_NOTIFICATION_QUEUE } from '../../queue/queue.constants';
 import { EmailJobData } from '../../queue/processors/email.processor';
+import { OrderEvent, OrderEventsService } from './order-events.service';
 
 const ORDER_INCLUDE = { items: true, coupon: true, shipping: true };
 
@@ -25,7 +26,13 @@ export class OrdersService {
     private readonly prisma: PrismaService,
     @InjectQueue(ORDER_NOTIFICATION_QUEUE) private readonly notificationQueue: Queue,
     @InjectQueue(EMAIL_QUEUE) private readonly emailQueue: Queue,
+    private readonly orderEvents: OrderEventsService,
   ) {}
+
+  /** Live-notification endpoint for the admin dashboard's SSE stream. */
+  streamEvents(tenantId: string) {
+    return this.orderEvents.stream(tenantId);
+  }
 
   async create(tenantId: string, dto: CreateOrderDto, customerId?: string) {
     const tenant = await this.prisma.db.tenant.findUniqueOrThrow({ where: { id: tenantId } });
@@ -102,9 +109,16 @@ export class OrdersService {
     }
 
     if (dto.fulfillmentMethod === 'WHATSAPP' || dto.fulfillmentMethod === 'TELEGRAM') {
-      return this.dispatchMessageFulfillment(tenant, order, pricedLines);
+      const result = await this.dispatchMessageFulfillment(tenant, order, pricedLines);
+      // After every step that could still throw and roll the order back —
+      // a false "new order" nudge for staff is worse than a slightly late one.
+      // dispatchMessageFulfillment's own update already set this row to
+      // CONFIRMED; result.order is the pre-update object, so it's named here.
+      this.orderEvents.emit(tenantId, this.toOrderEvent('order.created', { ...result.order, status: 'CONFIRMED' }));
+      return result;
     }
 
+    this.orderEvents.emit(tenantId, this.toOrderEvent('order.created', order));
     return { order, fulfillment: { type: 'STRIPE' as const } };
   }
 
@@ -384,13 +398,29 @@ export class OrdersService {
       if (tenant.tracksInventory) await this.releaseStock(order.items);
     }
 
-    return this.prisma.db.order.update({ where: { id }, data: { status: status as any } });
+    const updated = await this.prisma.db.order.update({ where: { id }, data: { status: status as any } });
+    this.orderEvents.emit(tenantId, this.toOrderEvent('order.status_updated', updated));
+    return updated;
   }
 
   private generateOrderNumber(): string {
     const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     const randomPart = randomBytes(3).toString('hex').toUpperCase();
     return `ORD-${datePart}-${randomPart}`;
+  }
+
+  private toOrderEvent(type: OrderEvent['type'], order: { id: string; orderNumber: string; customerName: string; grandTotal: unknown; currency: string; status: string }): OrderEvent {
+    return {
+      type,
+      order: {
+        id: order.id,
+        orderNumber: order.orderNumber,
+        customerName: order.customerName,
+        grandTotal: Number(order.grandTotal),
+        currency: order.currency,
+        status: order.status,
+      },
+    };
   }
 }
 

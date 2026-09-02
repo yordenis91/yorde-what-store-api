@@ -4,6 +4,7 @@ import { getQueueToken } from '@nestjs/bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EMAIL_QUEUE, ORDER_NOTIFICATION_QUEUE } from '../../queue/queue.constants';
 import { OrdersService } from './orders.service';
+import { OrderEvent, OrderEventsService } from './order-events.service';
 
 /**
  * These run against a hand-built Prisma double rather than a database. That
@@ -96,7 +97,9 @@ function createPrismaDouble(options: {
       create: jest.fn().mockImplementation(({ data }: { data: Record<string, unknown> }) =>
         Promise.resolve({ id: 'order-1', items: [], ...data, ...options.order }),
       ),
-      update: jest.fn().mockResolvedValue({}),
+      update: jest.fn().mockImplementation(({ data }: { data: Record<string, unknown> }) =>
+        Promise.resolve({ ...(options.order ?? {}), ...data }),
+      ),
       findFirst: jest.fn().mockResolvedValue(options.order ?? null),
       findMany: jest.fn().mockResolvedValue([]),
       count: jest.fn().mockResolvedValue(0),
@@ -110,6 +113,7 @@ async function buildService(double: ReturnType<typeof createPrismaDouble>) {
   const moduleRef = await Test.createTestingModule({
     providers: [
       OrdersService,
+      OrderEventsService,
       { provide: PrismaService, useValue: { db: double.db, tenant: double.db.tenant } },
       { provide: getQueueToken(ORDER_NOTIFICATION_QUEUE), useValue: { add: jest.fn() } },
       { provide: getQueueToken(EMAIL_QUEUE), useValue: { add: jest.fn() } },
@@ -117,6 +121,13 @@ async function buildService(double: ReturnType<typeof createPrismaDouble>) {
   }).compile();
 
   return moduleRef.get(OrdersService);
+}
+
+/** Collects every event OrdersService emits for a tenant during a test. */
+function collectEvents(service: OrdersService, tenantId: string): OrderEvent[] {
+  const events: OrderEvent[] = [];
+  service.streamEvents(tenantId).subscribe((event) => events.push(event));
+  return events;
 }
 
 const baseOrder = {
@@ -410,5 +421,61 @@ describe('OrdersService cancellation', () => {
     await service.updateStatus(TENANT_ID, 'order-1', 'COMPLETED');
 
     expect(double.stockUpdates).toHaveLength(0);
+  });
+});
+
+describe('OrdersService live events', () => {
+  it('announces a Stripe order once it is actually created', async () => {
+    const service = await buildService(createPrismaDouble({}));
+    const events = collectEvents(service, TENANT_ID);
+
+    await service.create(TENANT_ID, baseOrder);
+
+    expect(events).toEqual([
+      { type: 'order.created', order: expect.objectContaining({ id: 'order-1', status: 'PENDING' }) },
+    ]);
+  });
+
+  it('announces a WhatsApp order as CONFIRMED, matching the row dispatchMessageFulfillment just wrote', async () => {
+    const double = createPrismaDouble({ tenant: { whatsappEnabled: true, whatsappNumber: '+15550000000' } });
+    const service = await buildService(double);
+    const events = collectEvents(service, TENANT_ID);
+
+    await service.create(TENANT_ID, { ...baseOrder, fulfillmentMethod: 'WHATSAPP' });
+
+    expect(events).toEqual([
+      { type: 'order.created', order: expect.objectContaining({ status: 'CONFIRMED' }) },
+    ]);
+  });
+
+  it('does not announce an order that was rejected before it was ever created', async () => {
+    const service = await buildService(createPrismaDouble({ products: [] }));
+    const events = collectEvents(service, TENANT_ID);
+
+    await expect(service.create(TENANT_ID, baseOrder)).rejects.toThrow(BadRequestException);
+
+    expect(events).toHaveLength(0);
+  });
+
+  it('announces a status change separately from creation', async () => {
+    const order = { id: 'order-1', status: 'PENDING', items: [] };
+    const double = createPrismaDouble({ tenant: { tracksInventory: false }, order });
+    const service = await buildService(double);
+    const events = collectEvents(service, TENANT_ID);
+
+    await service.updateStatus(TENANT_ID, 'order-1', 'CANCELLED');
+
+    expect(events).toEqual([
+      { type: 'order.status_updated', order: expect.objectContaining({ id: 'order-1', status: 'CANCELLED' }) },
+    ]);
+  });
+
+  it('keeps tenants apart: one tenant never sees another tenant\'s order events', async () => {
+    const service = await buildService(createPrismaDouble({}));
+    const eventsForOtherTenant = collectEvents(service, 'some-other-tenant');
+
+    await service.create(TENANT_ID, baseOrder);
+
+    expect(eventsForOtherTenant).toHaveLength(0);
   });
 });

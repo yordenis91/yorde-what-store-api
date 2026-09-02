@@ -10,7 +10,9 @@ export interface TenantRequest extends Request {
 /**
  * Resolves the active tenant for the request from, in order:
  *   1. `X-Tenant-ID` header (UUID or slug) — used by the admin SPA and API clients.
- *   2. Subdomain of the Host header (`<slug>.example.com`) — used by public storefronts.
+ *   2. `tenantId` query param — the same thing, for EventSource (the admin
+ *      order-events SSE stream), which cannot attach custom headers.
+ *   3. Subdomain of the Host header (`<slug>.example.com`) — used by public storefronts.
  * Never throws: routes that require a tenant enforce that via TenantGuard.
  */
 @Injectable()
@@ -19,10 +21,11 @@ export class TenantMiddleware implements NestMiddleware {
 
   async use(req: TenantRequest, _res: Response, next: NextFunction) {
     const headerValue = req.header('x-tenant-id');
+    const queryValue = typeof req.query.tenantId === 'string' ? req.query.tenantId : undefined;
     const host = req.header('host') ?? '';
     const subdomain = this.extractSubdomain(host);
 
-    const identifier = headerValue ?? subdomain;
+    const identifier = headerValue ?? queryValue ?? subdomain;
     if (identifier) {
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identifier);
       const tenant = await this.prisma.tenant.findFirst({

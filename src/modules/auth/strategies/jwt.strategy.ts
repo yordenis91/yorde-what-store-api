@@ -19,7 +19,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     private readonly prisma: PrismaService,
   ) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      // The bearer header covers every normal request; the query-param
+      // fallback exists only for EventSource (the admin order-events SSE
+      // stream), which the browser gives no way to attach custom headers to.
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+        ExtractJwt.fromUrlQueryParameter('access_token'),
+      ]),
       ignoreExpiration: false,
       secretOrKey: config.get<string>('jwt.secret'),
     });

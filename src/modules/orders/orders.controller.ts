@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, MessageEvent, Param, Patch, Post, Query, Sse, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Observable, map } from 'rxjs';
 import { CurrentTenantId, Public, Roles } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
 import { CurrentCustomerId } from '../customers/decorators/current-customer-id.decorator';
@@ -37,6 +38,17 @@ export class OrdersController {
   @Get()
   findAll(@CurrentTenantId() tenantId: string, @Query() query: OrderQueryDto) {
     return this.ordersService.findAll(tenantId, query);
+  }
+
+  /**
+   * Live feed for the dashboard: one named SSE event per order created or
+   * updated for this tenant while the connection is open. Registered before
+   * `:id` — Nest/Express match routes in declaration order, so "events"
+   * would otherwise be swallowed as an :id.
+   */
+  @Sse('events')
+  streamEvents(@CurrentTenantId() tenantId: string): Observable<MessageEvent> {
+    return this.ordersService.streamEvents(tenantId).pipe(map((event) => ({ type: event.type, data: event.order })));
   }
 
   @Get(':id')
