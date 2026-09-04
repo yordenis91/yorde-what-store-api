@@ -7,6 +7,7 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
+import type { NextFunction, Request, Response } from 'express';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -31,6 +32,18 @@ async function bootstrap() {
 
   app.setGlobalPrefix(prefix);
   app.use(helmet());
+  // Every tenant-scoped GET (storefront and admin alike) resolves its tenant
+  // from the X-Tenant-ID header or JWT, not the URL — so two different
+  // tenants can request the exact same path (e.g. GET /storefront/products).
+  // Browsers key their HTTP cache on the URL, not on custom headers, so
+  // without this a visitor could be served another tenant's cached response
+  // for an identical-looking request. A route that genuinely wants caching
+  // (uploads, preview) sets its own Cache-Control later in the pipeline,
+  // which overrides this default.
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
   app.use(cookieParser());
   app.enableCors({
     origin: corsOrigins.length > 0 ? corsOrigins : true,
