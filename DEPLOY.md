@@ -67,7 +67,10 @@ npm run prisma:seed:prod
 
 `npm run prisma:seed` (sin `:prod`) usa `ts-node`, que es una devDependency y no
 existe en la imagen de producción. Por eso el Dockerfile precompila
-`prisma/seed.ts` a `dist-seed/seed.js` y `:prod` ejecuta esa versión.
+`prisma/seed.ts` a `dist-seed/prisma/seed.js` (la ruta anidada, no
+`dist-seed/seed.js`, es porque el seed importa desde `src/modules/...`, así
+que `tsc` calcula la raíz común de ambos como la raíz del repo) y `:prod`
+ejecuta esa versión.
 
 ## Notas de la imagen
 
