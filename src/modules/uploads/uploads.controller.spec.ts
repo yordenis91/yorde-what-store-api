@@ -1,6 +1,6 @@
 import sharp from 'sharp';
 import { BadRequestException } from '@nestjs/common';
-import { MAX_DIMENSION_PX, resizeToWebp } from './uploads.controller';
+import { LOGO_MAX_DIMENSION_PX, MAX_DIMENSION_PX, resizeToWebp } from './uploads.controller';
 
 async function solidColorImage(width: number, height: number, format: 'jpeg' | 'png' = 'jpeg') {
   const image = sharp({
@@ -45,6 +45,15 @@ describe('resizeToWebp', () => {
     const output = await resizeToWebp(input);
 
     expect(output.length).toBeLessThan(input.length / 2);
+  });
+
+  it('accepts a smaller maxDimension for logos, which are never shown large', async () => {
+    const input = await solidColorImage(4000, 3000);
+    const output = await resizeToWebp(input, LOGO_MAX_DIMENSION_PX);
+    const meta = await sharp(output).metadata();
+
+    expect(meta.width).toBeLessThanOrEqual(LOGO_MAX_DIMENSION_PX);
+    expect(meta.height).toBeLessThanOrEqual(LOGO_MAX_DIMENSION_PX);
   });
 
   it('rejects data that is not a real image', async () => {

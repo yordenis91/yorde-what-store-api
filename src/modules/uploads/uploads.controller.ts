@@ -4,6 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   BadRequestException,
+  Body,
   Controller,
   Post,
   Req,
@@ -18,6 +19,7 @@ import sharp from 'sharp';
 import { Roles } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
 import { TenantRequest } from '../../common/middleware/tenant.middleware';
+import { UploadImageDto } from './dto/upload-image.dto';
 
 const UPLOADS_ROOT = join(process.cwd(), 'uploads');
 const ALLOWED_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
@@ -31,6 +33,10 @@ const MAX_UPLOAD_SIZE_BYTES = 15 * 1024 * 1024;
 // sane max dimension is where the actual page-weight problem was: this repo
 // used to store and serve whatever the browser uploaded, unmodified.
 export const MAX_DIMENSION_PX = 1600;
+// A logo is never rendered larger than a few dozen px (header icon, small
+// hero avatar) — resizing it like a full product photo just wastes storage
+// and bandwidth on detail nobody sees.
+export const LOGO_MAX_DIMENSION_PX = 512;
 const WEBP_QUALITY = 82;
 
 /**
@@ -39,7 +45,7 @@ const WEBP_QUALITY = 82;
  * frame — while costing nothing extra for the overwhelming common case of a
  * single still photo. Without it, sharp silently keeps only the first frame.
  */
-export async function resizeToWebp(buffer: Buffer): Promise<Buffer> {
+export async function resizeToWebp(buffer: Buffer, maxDimension = MAX_DIMENSION_PX): Promise<Buffer> {
   try {
     return await sharp(buffer, { animated: true })
       // Bakes in the EXIF orientation tag (a phone photo taken in portrait is
@@ -47,7 +53,7 @@ export async function resizeToWebp(buffer: Buffer): Promise<Buffer> {
       // now-redundant EXIF block along with everything else — smaller file,
       // and no GPS/device metadata riding along with a public product photo.
       .rotate()
-      .resize({ width: MAX_DIMENSION_PX, height: MAX_DIMENSION_PX, fit: 'inside', withoutEnlargement: true })
+      .resize({ width: maxDimension, height: maxDimension, fit: 'inside', withoutEnlargement: true })
       .webp({ quality: WEBP_QUALITY })
       .toBuffer();
   } catch {
@@ -74,7 +80,11 @@ export class UploadsController {
       },
     }),
   )
-  async uploadImage(@UploadedFile() file: Express.Multer.File, @Req() req: TenantRequest) {
+  async uploadImage(
+    @UploadedFile() file: Express.Multer.File,
+    @Body() dto: UploadImageDto,
+    @Req() req: TenantRequest,
+  ) {
     if (!file) throw new BadRequestException('No file uploaded');
 
     const tenantId = req.tenantId!;
@@ -82,7 +92,8 @@ export class UploadsController {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
     const filename = `${randomUUID()}.webp`;
-    const output = await resizeToWebp(file.buffer);
+    const maxDimension = dto.type === 'logo' ? LOGO_MAX_DIMENSION_PX : MAX_DIMENSION_PX;
+    const output = await resizeToWebp(file.buffer, maxDimension);
     await writeFile(join(dir, filename), output);
 
     return { url: `/uploads/${tenantId}/${filename}` };
