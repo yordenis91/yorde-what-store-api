@@ -201,6 +201,15 @@ model Tenant {
   tagline      String?
   about        String? @db.Text
 
+  /// Merchant-authored policies shown to that store's own customers. These are
+  /// independent of Yorde What Store's own Terms/Privacy pages (which govern the
+  /// platform, not any one merchant) — each is optional and the storefront simply
+  /// omits the corresponding page/footer link until the merchant fills it in.
+  termsOfSaleContent    String? @map("terms_of_sale_content") @db.Text
+  shippingPolicyContent String? @map("shipping_policy_content") @db.Text
+  returnPolicyContent   String? @map("return_policy_content") @db.Text
+  privacyPolicyContent  String? @map("privacy_policy_content") @db.Text
+
   currency               String @default("USD")
   currencySymbol         String @default("$") @map("currency_symbol")
   currencySymbolPosition String @default("pre") @map("currency_symbol_position")

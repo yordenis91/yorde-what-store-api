@@ -75,6 +75,22 @@ export class UpdateTenantDto {
   itemLineTemplate?: string;
 
   @IsOptional()
+  @IsString()
+  termsOfSaleContent?: string;
+
+  @IsOptional()
+  @IsString()
+  shippingPolicyContent?: string;
+
+  @IsOptional()
+  @IsString()
+  returnPolicyContent?: string;
+
+  @IsOptional()
+  @IsString()
+  privacyPolicyContent?: string;
+
+  @IsOptional()
   @IsObject()
   socialLinks?: Record<string, string>;
 

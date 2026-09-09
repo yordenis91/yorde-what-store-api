@@ -45,6 +45,10 @@ export class TenantsService {
         socialLinks: true,
         whatsappEnabled: true,
         telegramEnabled: true,
+        termsOfSaleContent: true,
+        shippingPolicyContent: true,
+        returnPolicyContent: true,
+        privacyPolicyContent: true,
       },
     });
     if (!tenant) throw new NotFoundException('Store not found');
