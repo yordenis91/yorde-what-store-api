@@ -44,6 +44,12 @@ Todas las de `.env.example`. Tres merecen atención especial en producción:
   credenciales activadas (`src/main.ts:31`). Defínela siempre en producción.
 - **`NODE_ENV=production`** — activa el flag `secure` en la cookie de refresh
   (`src/modules/auth/auth.controller.ts:109`), que exige HTTPS.
+- **`SMTP_HOST`** — si queda vacía, el worker de correo (`src/queue/processors/email.processor.ts`)
+  no falla: registra en el log el asunto y el cuerpo en vez de enviarlo. Cómodo en
+  desarrollo, pero en producción significa que invitaciones de staff, confirmaciones
+  de pedido y recuperación de contraseña nunca llegan a la bandeja del destinatario
+  sin que se note ningún error. Usa el puerto 465 para TLS implícito o 587 para
+  STARTTLS (ambos soportados); revisa los logs del worker tras el primer envío real.
 
 ## Migraciones
 

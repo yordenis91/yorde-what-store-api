@@ -1,4 +1,4 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Job } from 'bullmq';
@@ -56,13 +56,34 @@ export class EmailProcessor extends WorkerHost {
     this.logger.log(`Sent "${subject}" to ${to}`);
   }
 
+  /**
+   * BullMQ retries silently in Redis by default — without this, an SMTP
+   * outage never shows up in the app's own logs, only in Redis job state.
+   * Fires once per exhausted attempt; `attemptsMade === attempts` is the one
+   * that means the recipient will never get this email at all.
+   */
+  @OnWorkerEvent('failed')
+  onFailed(job: Job<EmailJobData> | undefined) {
+    if (!job) return;
+    const exhausted = job.attemptsMade >= (job.opts.attempts ?? 1);
+    this.logger.error(
+      `Email job [${job.name}] to ${job.data.to} failed (attempt ${job.attemptsMade}/${job.opts.attempts ?? 1})` +
+        `${exhausted ? ' — giving up' : ', will retry'}: ${job.failedReason}`,
+    );
+  }
+
   private getTransporter(host: string): nodemailer.Transporter {
     if (!this.transporter) {
       const user = this.config.get<string>('mail.user');
       const password = this.config.get<string>('mail.password');
+      const port = this.config.get<number>('mail.port');
       this.transporter = nodemailer.createTransport({
         host,
-        port: this.config.get<number>('mail.port'),
+        port,
+        // 465 is implicit TLS from the first byte; every other port (587, 25)
+        // starts plaintext and upgrades via STARTTLS, which nodemailer already
+        // negotiates on its own when secure is false.
+        secure: port === 465,
         auth: user ? { user, pass: password } : undefined,
       });
     }

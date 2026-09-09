@@ -1,7 +1,7 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
-import { EMAIL_QUEUE } from '../../queue/queue.constants';
+import { EMAIL_JOB_OPTIONS, EMAIL_QUEUE } from '../../queue/queue.constants';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { EmailJobData } from '../../queue/processors/email.processor';
@@ -48,7 +48,7 @@ export class UsersService {
       locale: tenant.locale,
       to: dto.email,
       variables: { name: dto.name, store_name: tenant.name, temporary_password: dto.temporaryPassword },
-    } satisfies EmailJobData);
+    } satisfies EmailJobData, EMAIL_JOB_OPTIONS);
 
     return membership;
   }

@@ -6,7 +6,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
-import { EMAIL_QUEUE } from '../../queue/queue.constants';
+import { EMAIL_JOB_OPTIONS, EMAIL_QUEUE } from '../../queue/queue.constants';
 import { EmailJobData } from '../../queue/processors/email.processor';
 import { CustomerJwtPayload } from './strategies/customer-jwt.strategy';
 import { ForgotPasswordCustomerDto, LoginCustomerDto, RegisterCustomerDto, ResetPasswordCustomerDto } from './dto';
@@ -123,7 +123,7 @@ export class CustomersAuthService {
           store_name: tenant.name,
           reset_link: `${origin ?? ''}/login?token=${rawToken}`,
         },
-      } satisfies EmailJobData);
+      } satisfies EmailJobData, EMAIL_JOB_OPTIONS);
     }
 
     return { sent: true };

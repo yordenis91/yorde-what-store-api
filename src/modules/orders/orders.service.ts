@@ -7,7 +7,7 @@ import { PaginatedResult } from '../../common/dto/pagination.dto';
 import { CreateOrderDto, OrderItemInputDto, OrderQueryDto, QuoteOrderDto } from './dto';
 import { applyCouponDiscount, priceLineItem, round2 } from './pricing.util';
 import { buildWhatsappUrl, renderItemLine, renderOrderMessage } from './fulfillment/message-renderer';
-import { EMAIL_QUEUE, ORDER_NOTIFICATION_QUEUE } from '../../queue/queue.constants';
+import { EMAIL_JOB_OPTIONS, EMAIL_QUEUE, ORDER_NOTIFICATION_QUEUE } from '../../queue/queue.constants';
 import { EmailJobData } from '../../queue/processors/email.processor';
 import { OrderEvent, OrderEventsService } from './order-events.service';
 
@@ -106,7 +106,7 @@ export class OrdersService {
           order_no: order.orderNumber,
           grand_total: `${tenant.currencySymbol}${Number(order.grandTotal).toFixed(2)}`,
         },
-      } satisfies EmailJobData);
+      } satisfies EmailJobData, EMAIL_JOB_OPTIONS);
     }
 
     if (dto.fulfillmentMethod === 'WHATSAPP' || dto.fulfillmentMethod === 'TELEGRAM') {
