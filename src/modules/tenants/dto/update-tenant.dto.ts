@@ -40,6 +40,10 @@ export class UpdateTenantDto {
 
   @IsOptional()
   @IsString()
+  invoiceLogoUrl?: string;
+
+  @IsOptional()
+  @IsString()
   theme?: string;
 
   @IsOptional()

@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -9,6 +10,7 @@ import { applyCouponDiscount, priceLineItem, round2 } from './pricing.util';
 import { buildWhatsappUrl, renderItemLine, renderOrderMessage } from './fulfillment/message-renderer';
 import { EMAIL_JOB_OPTIONS, EMAIL_QUEUE, ORDER_NOTIFICATION_QUEUE } from '../../queue/queue.constants';
 import { EmailJobData } from '../../queue/processors/email.processor';
+import { getInvoicePath } from '../../queue/processors/invoice-storage.util';
 import { OrderEvent, OrderEventsService } from './order-events.service';
 
 const ORDER_INCLUDE = { items: true, coupon: true, shipping: true };
@@ -386,7 +388,18 @@ export class OrdersService {
   async findOne(tenantId: string, id: string) {
     const order = await this.prisma.db.order.findFirst({ where: { id, tenantId }, include: ORDER_INCLUDE });
     if (!order) throw new NotFoundException('Order not found');
-    return order;
+    return { ...order, invoiceAvailable: existsSync(getInvoicePath(tenantId, id)) };
+  }
+
+  /** Generation runs async off the Stripe webhook, so this can 404 for a moment after payment — the frontend only shows the download button once `invoiceAvailable` is true. */
+  async getInvoiceFile(tenantId: string, id: string): Promise<{ path: string; orderNumber: string }> {
+    const order = await this.prisma.db.order.findFirst({ where: { id, tenantId }, select: { orderNumber: true } });
+    if (!order) throw new NotFoundException('Order not found');
+
+    const path = getInvoicePath(tenantId, id);
+    if (!existsSync(path)) throw new NotFoundException('Invoice not available for this order yet');
+
+    return { path, orderNumber: order.orderNumber };
   }
 
   async updateStatus(tenantId: string, id: string, status: string) {

@@ -1,9 +1,12 @@
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import PDFDocument from 'pdfkit';
 import { PrismaService } from '../../prisma/prisma.service';
 import { INVOICE_PDF_QUEUE } from '../queue.constants';
+import { getInvoicePath, resolveLocalUploadPath } from './invoice-storage.util';
 
 @Processor(INVOICE_PDF_QUEUE)
 export class InvoicePdfProcessor extends WorkerHost {
@@ -17,22 +20,46 @@ export class InvoicePdfProcessor extends WorkerHost {
     const { tenantId, orderId } = job.data;
 
     await this.prisma.withTenant(tenantId, async (tx) => {
-      const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
+      const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true, tenant: true } });
       if (!order) return;
 
-      const buffer = await this.renderInvoice(order);
+      const logo = await this.loadLogo(order.tenant.invoiceLogoUrl ?? order.tenant.logoUrl);
+      const buffer = await this.renderInvoice(order, logo);
+
+      const path = getInvoicePath(tenantId, orderId);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, buffer);
       this.logger.log(`Generated invoice for order ${order.orderNumber} (${buffer.length} bytes)`);
-      // TODO: persist `buffer` to object storage and store the URL on the order.
     });
   }
 
-  private renderInvoice(order: any): Promise<Buffer> {
+  /** Best-effort: a missing or unreadable logo shouldn't fail invoice generation, just render without one. */
+  private async loadLogo(url: string | null | undefined): Promise<Buffer | null> {
+    const path = resolveLocalUploadPath(url);
+    if (!path) return null;
+    try {
+      return await readFile(path);
+    } catch {
+      return null;
+    }
+  }
+
+  private renderInvoice(order: any, logo: Buffer | null): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const doc = new PDFDocument({ margin: 50 });
       const chunks: Buffer[] = [];
       doc.on('data', (chunk) => chunks.push(chunk));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
+
+      if (logo) {
+        try {
+          doc.image(logo, doc.page.margins.left, doc.y, { fit: [120, 60] });
+          doc.moveDown(4);
+        } catch {
+          // Corrupt/unsupported image bytes shouldn't take down invoice generation.
+        }
+      }
 
       doc.fontSize(18).text(`Invoice ${order.orderNumber}`, { align: 'left' });
       doc.moveDown();

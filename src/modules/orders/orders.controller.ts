@@ -1,5 +1,6 @@
-import { Body, Controller, Get, MessageEvent, Param, Patch, Post, Query, Sse, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, MessageEvent, Param, Patch, Post, Query, Res, Sse, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import type { Response } from 'express';
 import { Observable, map } from 'rxjs';
 import { CurrentTenantId, Public, Roles } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
@@ -59,5 +60,17 @@ export class OrdersController {
   @Patch(':id/status')
   updateStatus(@CurrentTenantId() tenantId: string, @Param('id') id: string, @Body() dto: UpdateOrderStatusDto) {
     return this.ordersService.updateStatus(tenantId, id, dto.status);
+  }
+
+  /**
+   * `@Res()` without `passthrough: true` hands the raw Express response to
+   * us and opts this route out of the global TransformInterceptor, which
+   * would otherwise wrap a file stream in `{ success, data }` JSON. Thrown
+   * exceptions still go through Nest's normal exception filters regardless.
+   */
+  @Get(':id/invoice')
+  async downloadInvoice(@CurrentTenantId() tenantId: string, @Param('id') id: string, @Res() res: Response) {
+    const { path, orderNumber } = await this.ordersService.getInvoiceFile(tenantId, id);
+    res.download(path, `invoice-${orderNumber}.pdf`);
   }
 }
