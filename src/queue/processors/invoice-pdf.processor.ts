@@ -4,6 +4,7 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import PDFDocument from 'pdfkit';
+import sharp from 'sharp';
 import { PrismaService } from '../../prisma/prisma.service';
 import { INVOICE_PDF_QUEUE } from '../queue.constants';
 import { getInvoicePath, resolveLocalUploadPath } from './invoice-storage.util';
@@ -33,12 +34,19 @@ export class InvoicePdfProcessor extends WorkerHost {
     });
   }
 
-  /** Best-effort: a missing or unreadable logo shouldn't fail invoice generation, just render without one. */
+  /**
+   * Best-effort: a missing or unreadable logo shouldn't fail invoice generation,
+   * just render without one. Every image the app stores comes back as `.webp`
+   * (see uploads.controller.ts) — a format PDFKit's `doc.image()` cannot embed
+   * (it only reads JPEG and PNG) — so this re-encodes to PNG before handing it
+   * back, rather than leaving the caller's `doc.image()` to throw silently.
+   */
   private async loadLogo(url: string | null | undefined): Promise<Buffer | null> {
     const path = resolveLocalUploadPath(url);
     if (!path) return null;
     try {
-      return await readFile(path);
+      const webp = await readFile(path);
+      return await sharp(webp).png().toBuffer();
     } catch {
       return null;
     }
@@ -54,8 +62,15 @@ export class InvoicePdfProcessor extends WorkerHost {
 
       if (logo) {
         try {
-          doc.image(logo, doc.page.margins.left, doc.y, { fit: [120, 60] });
-          doc.moveDown(4);
+          // `doc.image()` with an explicit y doesn't advance the text cursor the
+          // way flowed content does — `doc.y` stays put, so the title below used
+          // to land underneath the logo instead of after it. Advancing by the
+          // fit box's own height (not a fixed moveDown()) keeps it clear
+          // regardless of the logo's aspect ratio.
+          const logoTop = doc.y;
+          const logoHeight = 60;
+          doc.image(logo, doc.page.margins.left, logoTop, { fit: [120, logoHeight] });
+          doc.y = logoTop + logoHeight + 15;
         } catch {
           // Corrupt/unsupported image bytes shouldn't take down invoice generation.
         }
