@@ -125,7 +125,7 @@ export class OrdersService {
     }
 
     this.orderEvents.emit(tenantId, this.toOrderEvent('order.created', order));
-    return { order, fulfillment: { type: 'STRIPE' as const } };
+    return { order, fulfillment: { type: dto.fulfillmentMethod as 'STRIPE' | 'MERCADOPAGO' } };
   }
 
   /**
@@ -471,10 +471,11 @@ export class OrdersService {
 
     // A WhatsApp/Telegram order has no online charge to reverse — "Refunded"
     // there is just a status label for money returned by other means. Only a
-    // Stripe-paid order has an actual charge, and only once: re-marking an
-    // already-refunded order REFUNDED must not call Stripe a second time.
-    if (status === 'REFUNDED' && order.paymentStatus === 'PAID' && order.stripePaymentIntentId) {
-      await this.paymentsService.refundPaymentIntent(tenantId, order.stripePaymentIntentId);
+    // Stripe/MercadoPago-paid order has an actual charge, and only once:
+    // re-marking an already-refunded order REFUNDED must not charge the
+    // provider's refund API a second time.
+    if (status === 'REFUNDED' && order.paymentStatus === 'PAID') {
+      await this.paymentsService.refundOrderPayment(tenantId, order);
       data.paymentStatus = 'REFUNDED';
     }
 

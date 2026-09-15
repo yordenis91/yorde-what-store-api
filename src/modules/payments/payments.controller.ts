@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Headers, Post, RawBodyRequest, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Headers, Post, Query, RawBodyRequest, Req, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { IsUUID, IsUrl } from 'class-validator';
@@ -31,6 +31,14 @@ export class StorefrontPaymentsController {
       cancelUrl: dto.cancelUrl,
     });
   }
+
+  @Post('mercadopago/checkout')
+  createMercadoPagoCheckout(@CurrentTenantId() tenantId: string, @Body() dto: CreateCheckoutDto) {
+    return this.paymentsService.createMercadoPagoCheckout(tenantId, dto.orderId, {
+      successUrl: dto.successUrl,
+      cancelUrl: dto.cancelUrl,
+    });
+  }
 }
 
 @ApiTags('payments')
@@ -44,5 +52,15 @@ export class PaymentsController {
     if (!req.rawBody) throw new BadRequestException('Missing raw body');
     if (!signature) throw new BadRequestException('Missing Stripe signature header');
     return this.paymentsService.handleStripeWebhook(req.rawBody, signature);
+  }
+
+  @Post('mercadopago/webhook')
+  async mercadoPagoWebhook(
+    @Headers('x-signature') xSignature: string | undefined,
+    @Headers('x-request-id') xRequestId: string | undefined,
+    @Query('data.id') dataId: string | undefined,
+    @Query('type') type: string | undefined,
+  ) {
+    return this.paymentsService.handleMercadoPagoWebhook({ xSignature, xRequestId }, dataId, type);
   }
 }

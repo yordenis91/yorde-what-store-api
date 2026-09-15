@@ -33,6 +33,16 @@ export const stripeConfig = registerAs('stripe', () => ({
   webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
 }));
 
+/**
+ * Platform-level MercadoPago credentials, used only for webhook signature
+ * verification and payment lookups. Per-tenant checkout credentials come from
+ * TenantPaymentSetting (see tenants.service.ts), mirroring the Stripe adapter.
+ */
+export const mercadoPagoConfig = registerAs('mercadoPago', () => ({
+  accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN,
+  webhookSecret: process.env.MERCADOPAGO_WEBHOOK_SECRET,
+}));
+
 export const mailConfig = registerAs('mail', () => ({
   host: process.env.SMTP_HOST,
   port: parseInt(process.env.SMTP_PORT ?? '587', 10),

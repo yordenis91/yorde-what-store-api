@@ -120,7 +120,7 @@ async function buildService(double: ReturnType<typeof createPrismaDouble>, payme
       { provide: PrismaService, useValue: { db: double.db, tenant: double.db.tenant } },
       { provide: getQueueToken(ORDER_NOTIFICATION_QUEUE), useValue: { add: jest.fn() } },
       { provide: getQueueToken(EMAIL_QUEUE), useValue: { add: jest.fn() } },
-      { provide: PaymentsService, useValue: { refundPaymentIntent: jest.fn(), ...paymentsService } },
+      { provide: PaymentsService, useValue: { refundOrderPayment: jest.fn(), ...paymentsService } },
     ],
   }).compile();
 
@@ -445,25 +445,25 @@ describe('OrdersService refunds', () => {
 
   it('refunds the real Stripe charge for a paid order and records it', async () => {
     const double = createPrismaDouble({ order: paidOrder });
-    const refundPaymentIntent = jest.fn().mockResolvedValue(undefined);
-    const service = await buildService(double, { refundPaymentIntent });
+    const refundOrderPayment = jest.fn().mockResolvedValue(undefined);
+    const service = await buildService(double, { refundOrderPayment });
 
     const updated = await service.updateStatus(TENANT_ID, 'order-1', 'REFUNDED');
 
-    expect(refundPaymentIntent).toHaveBeenCalledWith(TENANT_ID, 'pi_123');
+    expect(refundOrderPayment).toHaveBeenCalledWith(TENANT_ID, expect.objectContaining(paidOrder));
     expect(updated).toMatchObject({ status: 'REFUNDED', paymentStatus: 'REFUNDED' });
   });
 
-  it('does not call Stripe for an order with no online charge (WhatsApp/Telegram)', async () => {
+  it('does not call the payment provider for an order with no online charge (WhatsApp/Telegram)', async () => {
     const double = createPrismaDouble({
       order: { id: 'order-1', status: 'CONFIRMED', paymentStatus: 'PENDING', stripePaymentIntentId: null, items: [] },
     });
-    const refundPaymentIntent = jest.fn();
-    const service = await buildService(double, { refundPaymentIntent });
+    const refundOrderPayment = jest.fn();
+    const service = await buildService(double, { refundOrderPayment });
 
     const updated = await service.updateStatus(TENANT_ID, 'order-1', 'REFUNDED');
 
-    expect(refundPaymentIntent).not.toHaveBeenCalled();
+    expect(refundOrderPayment).not.toHaveBeenCalled();
     expect(updated).toMatchObject({ status: 'REFUNDED' });
   });
 
@@ -471,12 +471,12 @@ describe('OrdersService refunds', () => {
     const double = createPrismaDouble({
       order: { ...paidOrder, status: 'REFUNDED', paymentStatus: 'REFUNDED' },
     });
-    const refundPaymentIntent = jest.fn();
-    const service = await buildService(double, { refundPaymentIntent });
+    const refundOrderPayment = jest.fn();
+    const service = await buildService(double, { refundOrderPayment });
 
     await service.updateStatus(TENANT_ID, 'order-1', 'REFUNDED');
 
-    expect(refundPaymentIntent).not.toHaveBeenCalled();
+    expect(refundOrderPayment).not.toHaveBeenCalled();
   });
 });
 
