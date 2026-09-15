@@ -122,7 +122,17 @@ export class BackupsService implements OnModuleInit {
   onModuleInit() {
     if (!this.isConfigured()) return;
     const cronExpression = this.config.get<string>('backup.cron')!;
-    const job = new CronJob(cronExpression, () => this.handleScheduledBackup());
+    let job: CronJob;
+    try {
+      job = new CronJob(cronExpression, () => this.handleScheduledBackup());
+    } catch (err) {
+      // A malformed BACKUP_CRON must disable this one optional feature, not
+      // crash the whole process — every other module still has to boot.
+      this.logger.error(
+        `Invalid BACKUP_CRON "${cronExpression}": ${(err as Error).message} — scheduled backups are disabled until this is fixed`,
+      );
+      return;
+    }
     this.scheduler.addCronJob('postgres-backup', job);
     job.start();
   }
