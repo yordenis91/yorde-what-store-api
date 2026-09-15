@@ -140,10 +140,18 @@ export class AuthService {
       throw new UnauthorizedException('Refresh token no longer valid');
     }
 
-    await this.prisma.refreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } });
-
-    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: payload.sub } });
-    return this.issueTokenPair(user.id, user.email, user.globalRole, payload.tenantId, payload.tenantRole);
+    // From here on, anything unexpected (the token's row vanishing under a
+    // concurrent refresh, the user having been deleted since the token was
+    // issued, ...) must still fail closed as a 401 — a stale/broken session
+    // should force a fresh login, never surface as a raw 500.
+    try {
+      await this.prisma.refreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } });
+      const user = await this.prisma.user.findUniqueOrThrow({ where: { id: payload.sub } });
+      return await this.issueTokenPair(user.id, user.email, user.globalRole, payload.tenantId, payload.tenantRole);
+    } catch (err) {
+      if (err instanceof UnauthorizedException) throw err;
+      throw new UnauthorizedException('Refresh token no longer valid');
+    }
   }
 
   async logout(userId: string, rawRefreshToken?: string) {
