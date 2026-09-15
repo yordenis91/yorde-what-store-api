@@ -14,7 +14,14 @@ export class PlatformService {
       this.prisma.tenant.findMany({
         orderBy: { createdAt: 'desc' },
         take: 5,
-        select: { id: true, name: true, slug: true, isActive: true, createdAt: true, owner: { select: { email: true } } },
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          isActive: true,
+          createdAt: true,
+          owner: { select: { email: true } },
+        },
       }),
       this.prisma.withRlsBypass(async (tx) => {
         const [totalOrders, paidOrders] = await Promise.all([
@@ -54,7 +61,12 @@ export class PlatformService {
             : 0;
       mrr += monthly;
 
-      const entry = byPlan.get(sub.planId) ?? { planId: sub.planId, name: sub.plan.name, activeSubscriptions: 0, mrr: 0 };
+      const entry = byPlan.get(sub.planId) ?? {
+        planId: sub.planId,
+        name: sub.plan.name,
+        activeSubscriptions: 0,
+        mrr: 0,
+      };
       entry.activeSubscriptions += 1;
       entry.mrr += monthly;
       byPlan.set(sub.planId, entry);

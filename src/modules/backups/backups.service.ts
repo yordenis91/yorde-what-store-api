@@ -30,10 +30,7 @@ export interface BackupSummary {
  * (newest `retentionCount` kept, everything older deleted)? Input order is
  * not assumed — this sorts newest-first itself.
  */
-export function selectStaleKeys(
-  objects: { key: string; lastModified: Date }[],
-  retentionCount: number,
-): string[] {
+export function selectStaleKeys(objects: { key: string; lastModified: Date }[], retentionCount: number): string[] {
   return [...objects]
     .sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime())
     .slice(retentionCount)
@@ -133,10 +130,10 @@ export class BackupsService implements OnModuleInit {
   isConfigured(): boolean {
     return Boolean(
       this.config.get('backup.databaseUrl') &&
-        this.config.get('backup.s3Endpoint') &&
-        this.config.get('backup.s3Bucket') &&
-        this.config.get('backup.s3AccessKeyId') &&
-        this.config.get('backup.s3SecretAccessKey'),
+      this.config.get('backup.s3Endpoint') &&
+      this.config.get('backup.s3Bucket') &&
+      this.config.get('backup.s3AccessKeyId') &&
+      this.config.get('backup.s3SecretAccessKey'),
     );
   }
 
@@ -229,7 +226,11 @@ export class BackupsService implements OnModuleInit {
     let continuationToken: string | undefined;
     do {
       const page = await this.s3!.send(
-        new ListObjectsV2Command({ Bucket: this.bucket, Prefix: `${this.prefix}/`, ContinuationToken: continuationToken }),
+        new ListObjectsV2Command({
+          Bucket: this.bucket,
+          Prefix: `${this.prefix}/`,
+          ContinuationToken: continuationToken,
+        }),
       );
       all.push(...(page.Contents ?? []));
       continuationToken = page.NextContinuationToken;

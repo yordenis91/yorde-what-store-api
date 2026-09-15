@@ -8,16 +8,18 @@ import { PaymentsService } from './payments.service';
 
 const TENANT_ID = 'tenant-1';
 
-function buildService(overrides: {
-  order?: Record<string, unknown> | null;
-  mercadoPagoAdapter?: Partial<MercadoPagoAdapter>;
-  stripeAdapter?: Partial<StripeAdapter>;
-} = {}) {
+function buildService(
+  overrides: {
+    order?: Record<string, unknown> | null;
+    mercadoPagoAdapter?: Partial<MercadoPagoAdapter>;
+    stripeAdapter?: Partial<StripeAdapter>;
+  } = {},
+) {
   const update = jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'order-1', ...data }));
   const findFirst = jest.fn().mockResolvedValue(overrides.order ?? null);
-  const withTenant = jest.fn().mockImplementation((_tenantId: string, work: (tx: unknown) => unknown) =>
-    work({ order: { update } }),
-  );
+  const withTenant = jest
+    .fn()
+    .mockImplementation((_tenantId: string, work: (tx: unknown) => unknown) => work({ order: { update } }));
 
   const prisma = { db: { order: { findFirst, update } }, withTenant } as unknown as PrismaService;
   const tenantsService = {
@@ -132,7 +134,10 @@ describe('PaymentsService.refundOrderPayment', () => {
   it('does nothing for an order with no online charge to reverse', async () => {
     const stripeRefund = jest.fn();
     const mpRefund = jest.fn();
-    const { service } = buildService({ stripeAdapter: { refund: stripeRefund }, mercadoPagoAdapter: { refund: mpRefund } });
+    const { service } = buildService({
+      stripeAdapter: { refund: stripeRefund },
+      mercadoPagoAdapter: { refund: mpRefund },
+    });
     const order = { fulfillmentMethod: 'WHATSAPP' } as Order;
 
     await service.refundOrderPayment(TENANT_ID, order);

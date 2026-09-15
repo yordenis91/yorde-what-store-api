@@ -59,7 +59,12 @@ describe('Dashboard summary (e2e)', () => {
   it('computes revenue, sessions-based conversion, top products and coupon usage for a real 7-day window', async () => {
     const { tenant, owner } = await seedTenant(prisma, { slug: 'dash-tenant' });
     const token = ownerToken(owner.id, owner.email, tenant.id);
-    const product = await seedProduct(prisma, tenant.id, { name: 'Widget', sku: 'W-1', price: '100.00', quantity: 100 });
+    const product = await seedProduct(prisma, tenant.id, {
+      name: 'Widget',
+      sku: 'W-1',
+      price: '100.00',
+      quantity: 100,
+    });
 
     const from = new Date();
     from.setDate(from.getDate() - 6);
@@ -118,7 +123,13 @@ describe('Dashboard summary (e2e)', () => {
     }
 
     // Session A: visits then buys — a converted session.
-    await seedOrder({ createdAt: oldestDay, grandTotal: '100.00', status: 'CONFIRMED', paymentStatus: 'PAID', sessionId: SESSION_A });
+    await seedOrder({
+      createdAt: oldestDay,
+      grandTotal: '100.00',
+      status: 'CONFIRMED',
+      paymentStatus: 'PAID',
+      sessionId: SESSION_A,
+    });
     // Session B: visits, buys with a coupon, order still PENDING (not paid) — counts toward periodRevenue/conversion but not lifetimeRevenue.
     await seedOrder({
       createdAt: midDay,
@@ -135,11 +146,29 @@ describe('Dashboard summary (e2e)', () => {
     await prisma.withTenant(tenant.id, (tx) =>
       tx.visit.createMany({
         data: [
-          { tenantId: tenant.id, path: '/', referrer: 'https://google.com', sessionId: SESSION_A, createdAt: oldestDay },
-          { tenantId: tenant.id, path: '/product/x', referrer: 'https://google.com', sessionId: SESSION_A, createdAt: oldestDay },
+          {
+            tenantId: tenant.id,
+            path: '/',
+            referrer: 'https://google.com',
+            sessionId: SESSION_A,
+            createdAt: oldestDay,
+          },
+          {
+            tenantId: tenant.id,
+            path: '/product/x',
+            referrer: 'https://google.com',
+            sessionId: SESSION_A,
+            createdAt: oldestDay,
+          },
           { tenantId: tenant.id, path: '/', referrer: 'https://google.com', sessionId: SESSION_B, createdAt: midDay },
           // Session C bounces — visits, never orders.
-          { tenantId: tenant.id, path: '/', referrer: 'https://instagram.com', sessionId: SESSION_C, createdAt: midDay },
+          {
+            tenantId: tenant.id,
+            path: '/',
+            referrer: 'https://instagram.com',
+            sessionId: SESSION_C,
+            createdAt: midDay,
+          },
         ],
       }),
     );
@@ -171,9 +200,7 @@ describe('Dashboard summary (e2e)', () => {
       { referrer: 'https://instagram.com', sessions: 1 },
     ]);
 
-    expect(summary.topProducts).toEqual([
-      expect.objectContaining({ name: 'Widget', quantitySold: 3, revenue: 225 }),
-    ]);
+    expect(summary.topProducts).toEqual([expect.objectContaining({ name: 'Widget', quantitySold: 3, revenue: 225 })]);
 
     expect(summary.couponPerformance).toEqual([{ code: 'SAVE10', timesUsed: 1, discountGiven: 10 }]);
 
@@ -186,10 +213,15 @@ describe('Dashboard summary (e2e)', () => {
     expect(oldestVisitBucket).toMatchObject({ visitors: 1, pageviews: 2 });
   });
 
-  it('never leaks another tenant\'s orders or visits into the summary', async () => {
+  it("never leaks another tenant's orders or visits into the summary", async () => {
     const { tenant: tenantA, owner: ownerA } = await seedTenant(prisma, { slug: 'dash-tenant-a' });
     const { tenant: tenantB } = await seedTenant(prisma, { slug: 'dash-tenant-b' });
-    const productB = await seedProduct(prisma, tenantB.id, { name: 'Other store item', sku: 'O-1', price: '10.00', quantity: 5 });
+    const productB = await seedProduct(prisma, tenantB.id, {
+      name: 'Other store item',
+      sku: 'O-1',
+      price: '10.00',
+      quantity: 5,
+    });
 
     await prisma.withTenant(tenantB.id, (tx) =>
       tx.order.create({
@@ -203,7 +235,18 @@ describe('Dashboard summary (e2e)', () => {
           currency: 'USD',
           subtotal: '10.00',
           grandTotal: '10.00',
-          items: { create: [{ tenantId: tenantB.id, productId: productB.id, productName: productB.name, unitPrice: '10.00', quantity: 1, lineTotal: '10.00' }] },
+          items: {
+            create: [
+              {
+                tenantId: tenantB.id,
+                productId: productB.id,
+                productName: productB.name,
+                unitPrice: '10.00',
+                quantity: 1,
+                lineTotal: '10.00',
+              },
+            ],
+          },
         },
       }),
     );

@@ -83,7 +83,9 @@ export class InvoicePdfProcessor extends WorkerHost {
       doc.moveDown();
 
       for (const item of order.items) {
-        doc.text(`${item.quantity} x ${item.productName}${item.variantName ? ` (${item.variantName})` : ''} — ${item.lineTotal}`);
+        doc.text(
+          `${item.quantity} x ${item.productName}${item.variantName ? ` (${item.variantName})` : ''} — ${item.lineTotal}`,
+        );
       }
 
       doc.moveDown();

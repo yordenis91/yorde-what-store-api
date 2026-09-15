@@ -31,7 +31,9 @@ describe('Email templates (e2e)', () => {
     // least the key this file exercises to exist so "no override yet" has
     // something real to fall back to.
     await prisma.withRlsBypass(async (tx) => {
-      const existing = await tx.emailTemplate.findFirst({ where: { tenantId: null, key: 'staff-invite', locale: 'en' } });
+      const existing = await tx.emailTemplate.findFirst({
+        where: { tenantId: null, key: 'staff-invite', locale: 'en' },
+      });
       if (!existing) {
         await tx.emailTemplate.create({
           data: { tenantId: null, key: 'staff-invite', locale: 'en', subject: 'Global subject', body: 'Global body' },

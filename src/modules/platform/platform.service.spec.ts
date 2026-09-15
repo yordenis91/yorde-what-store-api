@@ -58,7 +58,9 @@ describe('PlatformService billing summary', () => {
   it('does not count a lifetime plan toward recurring revenue', async () => {
     const service = await buildService(
       buildDouble({
-        subscriptions: [{ planId: 'p-life', status: 'ACTIVE', plan: { name: 'Lifetime', price: '999', duration: 'LIFETIME' } }],
+        subscriptions: [
+          { planId: 'p-life', status: 'ACTIVE', plan: { name: 'Lifetime', price: '999', duration: 'LIFETIME' } },
+        ],
       }),
     );
 
@@ -71,7 +73,9 @@ describe('PlatformService billing summary', () => {
   it('still counts a PENDING_UPGRADE subscription as currently paying', async () => {
     const service = await buildService(
       buildDouble({
-        subscriptions: [{ planId: 'p1', status: 'PENDING_UPGRADE', plan: { name: 'Pro', price: '30', duration: 'MONTHLY' } }],
+        subscriptions: [
+          { planId: 'p1', status: 'PENDING_UPGRADE', plan: { name: 'Pro', price: '30', duration: 'MONTHLY' } },
+        ],
       }),
     );
 

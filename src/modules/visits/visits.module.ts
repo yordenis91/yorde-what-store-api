@@ -19,10 +19,6 @@ export class VisitsModule implements OnModuleInit {
    * instead of piling up duplicates.
    */
   async onModuleInit() {
-    await this.cleanupQueue.add(
-      'cleanup',
-      {},
-      { repeat: { pattern: '0 3 * * *' }, jobId: 'visits-daily-cleanup' },
-    );
+    await this.cleanupQueue.add('cleanup', {}, { repeat: { pattern: '0 3 * * *' }, jobId: 'visits-daily-cleanup' });
   }
 }

@@ -15,9 +15,7 @@ export async function bootstrapTestApp(): Promise<INestApplication> {
 
   app.setGlobalPrefix('api/v1');
   app.use(cookieParser());
-  app.useGlobalPipes(
-    new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
-  );
+  app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
 
   await app.init();
   return app;

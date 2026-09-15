@@ -1,10 +1,5 @@
 import { createHash } from 'node:crypto';
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -234,7 +229,7 @@ export class AuthService {
   }
 
   private sanitizeUser(user: { passwordHash?: string; totpSecret?: string | null; [k: string]: unknown }) {
-    const { passwordHash, totpSecret, ...safe } = user;
+    const { passwordHash: _passwordHash, totpSecret: _totpSecret, ...safe } = user;
     return safe;
   }
 }

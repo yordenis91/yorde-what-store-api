@@ -2,7 +2,13 @@ import { toCsv } from './csv.util';
 
 describe('toCsv', () => {
   it('joins headers and rows with commas and CRLF, prefixed with a UTF-8 BOM', () => {
-    const csv = toCsv(['Name', 'Total'], [['Ana', 10], ['Bob', 20]]);
+    const csv = toCsv(
+      ['Name', 'Total'],
+      [
+        ['Ana', 10],
+        ['Bob', 20],
+      ],
+    );
 
     expect(csv).toBe('﻿Name,Total\r\nAna,10\r\nBob,20');
   });

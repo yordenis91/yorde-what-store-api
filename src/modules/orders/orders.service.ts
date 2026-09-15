@@ -100,18 +100,22 @@ export class OrdersService {
     // notify the tenant, but an email gives the customer their own paper trail
     // that survives losing the confirmation page or the WhatsApp thread.
     if (order.customerEmail) {
-      await this.emailQueue.add('order-confirmation', {
-        templateKey: 'order-confirmation',
-        tenantId,
-        locale: tenant.locale,
-        to: order.customerEmail,
-        variables: {
-          customer_name: order.customerName,
-          store_name: tenant.name,
-          order_no: order.orderNumber,
-          grand_total: `${tenant.currencySymbol}${Number(order.grandTotal).toFixed(2)}`,
-        },
-      } satisfies EmailJobData, EMAIL_JOB_OPTIONS);
+      await this.emailQueue.add(
+        'order-confirmation',
+        {
+          templateKey: 'order-confirmation',
+          tenantId,
+          locale: tenant.locale,
+          to: order.customerEmail,
+          variables: {
+            customer_name: order.customerName,
+            store_name: tenant.name,
+            order_no: order.orderNumber,
+            grand_total: `${tenant.currencySymbol}${Number(order.grandTotal).toFixed(2)}`,
+          },
+        } satisfies EmailJobData,
+        EMAIL_JOB_OPTIONS,
+      );
     }
 
     if (dto.fulfillmentMethod === 'WHATSAPP' || dto.fulfillmentMethod === 'TELEGRAM') {
@@ -234,11 +238,7 @@ export class OrdersService {
       if (taken.count === 0) {
         const available = variant ? variant.quantity : product.quantity;
         const label = variant ? `${product.name} (${variant.name})` : product.name;
-        throw new ConflictException(
-          available > 0
-            ? `Only ${available} left of ${label}`
-            : `${label} is out of stock`,
-        );
+        throw new ConflictException(available > 0 ? `Only ${available} left of ${label}` : `${label} is out of stock`);
       }
     }
   }
@@ -340,7 +340,10 @@ export class OrdersService {
       if (!tenant.whatsappEnabled || !tenant.whatsappNumber) {
         throw new BadRequestException('This store has not enabled WhatsApp checkout');
       }
-      return { order, fulfillment: { type: 'WHATSAPP' as const, redirectUrl: buildWhatsappUrl(tenant.whatsappNumber, message) } };
+      return {
+        order,
+        fulfillment: { type: 'WHATSAPP' as const, redirectUrl: buildWhatsappUrl(tenant.whatsappNumber, message) },
+      };
     }
 
     if (!tenant.telegramEnabled || !tenant.telegramBotToken || !tenant.telegramChatId) {
@@ -490,7 +493,17 @@ export class OrdersService {
     return `ORD-${datePart}-${randomPart}`;
   }
 
-  private toOrderEvent(type: OrderEvent['type'], order: { id: string; orderNumber: string; customerName: string; grandTotal: unknown; currency: string; status: string }): OrderEvent {
+  private toOrderEvent(
+    type: OrderEvent['type'],
+    order: {
+      id: string;
+      orderNumber: string;
+      customerName: string;
+      grandTotal: unknown;
+      currency: string;
+      status: string;
+    },
+  ): OrderEvent {
     return {
       type,
       order: {

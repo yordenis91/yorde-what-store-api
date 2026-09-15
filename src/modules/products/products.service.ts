@@ -4,7 +4,14 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PaginatedResult } from '../../common/dto/pagination.dto';
 import { CategoryTemplatesService } from '../category-templates/category-templates.service';
 import { PlansService } from '../plans/plans.service';
-import { CreateProductDto, UpdateProductDto, CreateCategoryDto, CreateTaxDto, AddProductImageDto, ProductQueryDto } from './dto';
+import {
+  CreateProductDto,
+  UpdateProductDto,
+  CreateCategoryDto,
+  CreateTaxDto,
+  AddProductImageDto,
+  ProductQueryDto,
+} from './dto';
 
 function sortToOrderBy(sort?: string): Prisma.ProductOrderByWithRelationInput {
   if (sort === 'price_asc') return { price: 'asc' };

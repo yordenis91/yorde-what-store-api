@@ -40,14 +40,17 @@ describe('renderOrderMessage', () => {
 
 describe('renderItemLine', () => {
   it('substitutes item-level placeholders', () => {
-    const rendered = renderItemLine('{sku} : {quantity} x {product_name} - {variant_name} + {item_tax} = {item_total}', {
-      sku: 'CAM-001',
-      quantity: 2,
-      productName: 'Camiseta',
-      variantName: 'M',
-      itemTax: '0.00',
-      itemTotal: '39.98',
-    });
+    const rendered = renderItemLine(
+      '{sku} : {quantity} x {product_name} - {variant_name} + {item_tax} = {item_total}',
+      {
+        sku: 'CAM-001',
+        quantity: 2,
+        productName: 'Camiseta',
+        variantName: 'M',
+        itemTax: '0.00',
+        itemTotal: '39.98',
+      },
+    );
     expect(rendered).toBe('CAM-001 : 2 x Camiseta - M + 0.00 = 39.98');
   });
 

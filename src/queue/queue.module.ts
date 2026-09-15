@@ -25,6 +25,12 @@ import { EmailTemplatesModule } from '../modules/email-templates/email-templates
       { name: VISITS_CLEANUP_QUEUE },
     ),
   ],
-  providers: [EmailProcessor, InvoicePdfProcessor, InventorySyncProcessor, OrderNotificationProcessor, VisitsCleanupProcessor],
+  providers: [
+    EmailProcessor,
+    InvoicePdfProcessor,
+    InventorySyncProcessor,
+    OrderNotificationProcessor,
+    VisitsCleanupProcessor,
+  ],
 })
 export class QueueModule {}

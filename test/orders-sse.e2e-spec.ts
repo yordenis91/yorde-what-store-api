@@ -54,25 +54,22 @@ describe('Orders live events (e2e)', () => {
     const received: { event: string; data: unknown }[] = [];
     const waiters: ((entry: { event: string; data: unknown }) => void)[] = [];
 
-    const req = http.get(
-      `${baseUrl}/api/v1/orders/events?access_token=${token}&tenantId=${tenantId}`,
-      (res) => {
-        let buffer = '';
-        res.on('data', (chunk: Buffer) => {
-          buffer += chunk.toString('utf8');
-          const frames = buffer.split('\n\n');
-          buffer = frames.pop() ?? '';
-          for (const frame of frames) {
-            const eventLine = frame.split('\n').find((l) => l.startsWith('event:'));
-            const dataLine = frame.split('\n').find((l) => l.startsWith('data:'));
-            if (!dataLine) continue;
-            const entry = { event: eventLine?.slice(6).trim() ?? 'message', data: JSON.parse(dataLine.slice(5).trim()) };
-            received.push(entry);
-            waiters.shift()?.(entry);
-          }
-        });
-      },
-    );
+    const req = http.get(`${baseUrl}/api/v1/orders/events?access_token=${token}&tenantId=${tenantId}`, (res) => {
+      let buffer = '';
+      res.on('data', (chunk: Buffer) => {
+        buffer += chunk.toString('utf8');
+        const frames = buffer.split('\n\n');
+        buffer = frames.pop() ?? '';
+        for (const frame of frames) {
+          const eventLine = frame.split('\n').find((l) => l.startsWith('event:'));
+          const dataLine = frame.split('\n').find((l) => l.startsWith('data:'));
+          if (!dataLine) continue;
+          const entry = { event: eventLine?.slice(6).trim() ?? 'message', data: JSON.parse(dataLine.slice(5).trim()) };
+          received.push(entry);
+          waiters.shift()?.(entry);
+        }
+      });
+    });
     req.on('error', () => {
       /* swallowed: the test closes this socket itself at the end */
     });
@@ -117,7 +114,7 @@ describe('Orders live events (e2e)', () => {
     stream.close();
   }, 30_000);
 
-  it('never delivers one tenant\'s order events to another tenant\'s stream', async () => {
+  it("never delivers one tenant's order events to another tenant's stream", async () => {
     const { tenant: tenantA, owner: ownerA } = await seedTenant(prisma, { slug: 'sse-tenant-a' });
     const { tenant: tenantB, owner: ownerB } = await seedTenant(prisma, { slug: 'sse-tenant-b' });
     const product = await seedProduct(prisma, tenantA.id, { name: 'Widget', sku: 'W-2', price: '10.00', quantity: 5 });

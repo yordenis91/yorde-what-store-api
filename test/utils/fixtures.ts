@@ -5,10 +5,7 @@ import { PrismaService } from '../../src/prisma/prisma.service';
  * doesn't belong to one — so these writes need no app.tenant_id / bypass_rls
  * at all. Only tenant-scoped tables (products, orders, …) need that.
  */
-export async function seedTenant(
-  prisma: PrismaService,
-  overrides: { slug: string; tracksInventory?: boolean },
-) {
+export async function seedTenant(prisma: PrismaService, overrides: { slug: string; tracksInventory?: boolean }) {
   const owner = await prisma.user.create({
     data: { email: `${overrides.slug}-owner@test.com`, passwordHash: 'x', name: 'Owner' },
   });

@@ -41,14 +41,21 @@ export class UsersService {
       data: { tenantId, userId: user.id, role: 'STAFF', permissions: dto.permissions ?? [] },
     });
 
-    const tenant = await this.prisma.db.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { name: true, locale: true } });
-    await this.emailQueue.add('staff-invite', {
-      templateKey: 'staff-invite',
-      tenantId,
-      locale: tenant.locale,
-      to: dto.email,
-      variables: { name: dto.name, store_name: tenant.name, temporary_password: dto.temporaryPassword },
-    } satisfies EmailJobData, EMAIL_JOB_OPTIONS);
+    const tenant = await this.prisma.db.tenant.findUniqueOrThrow({
+      where: { id: tenantId },
+      select: { name: true, locale: true },
+    });
+    await this.emailQueue.add(
+      'staff-invite',
+      {
+        templateKey: 'staff-invite',
+        tenantId,
+        locale: tenant.locale,
+        to: dto.email,
+        variables: { name: dto.name, store_name: tenant.name, temporary_password: dto.temporaryPassword },
+      } satisfies EmailJobData,
+      EMAIL_JOB_OPTIONS,
+    );
 
     return membership;
   }

@@ -20,7 +20,9 @@ export class EmailTemplatesService {
       const override = await tx.emailTemplate.findFirst({ where: { tenantId, key, locale, isActive: true } });
       if (override) return override;
 
-      const globalDefault = await tx.emailTemplate.findFirst({ where: { tenantId: null, key, locale, isActive: true } });
+      const globalDefault = await tx.emailTemplate.findFirst({
+        where: { tenantId: null, key, locale, isActive: true },
+      });
       return globalDefault ?? DEFAULT_TEMPLATES[key];
     });
   }

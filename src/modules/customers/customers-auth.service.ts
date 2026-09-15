@@ -113,17 +113,21 @@ export class CustomersAuthService {
         },
       });
 
-      await this.emailQueue.add('password-reset', {
-        templateKey: 'password-reset',
-        tenantId,
-        locale: tenant.locale,
-        to: customer.email,
-        variables: {
-          name: customer.name,
-          store_name: tenant.name,
-          reset_link: `${origin ?? ''}/login?token=${rawToken}`,
-        },
-      } satisfies EmailJobData, EMAIL_JOB_OPTIONS);
+      await this.emailQueue.add(
+        'password-reset',
+        {
+          templateKey: 'password-reset',
+          tenantId,
+          locale: tenant.locale,
+          to: customer.email,
+          variables: {
+            name: customer.name,
+            store_name: tenant.name,
+            reset_link: `${origin ?? ''}/login?token=${rawToken}`,
+          },
+        } satisfies EmailJobData,
+        EMAIL_JOB_OPTIONS,
+      );
     }
 
     return { sent: true };
@@ -145,7 +149,10 @@ export class CustomersAuthService {
     // so these just need to go through the same scoped client — no nested $transaction.
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
     await this.prisma.db.customer.update({ where: { id: customer.id }, data: { passwordHash } });
-    await this.prisma.db.customerPasswordResetToken.update({ where: { id: resetToken.id }, data: { usedAt: new Date() } });
+    await this.prisma.db.customerPasswordResetToken.update({
+      where: { id: resetToken.id },
+      data: { usedAt: new Date() },
+    });
     await this.prisma.db.customerRefreshToken.updateMany({
       where: { customerId: customer.id, revokedAt: null },
       data: { revokedAt: new Date() },
@@ -183,7 +190,7 @@ export class CustomersAuthService {
   }
 
   private sanitize(customer: { passwordHash?: string | null; [k: string]: unknown }) {
-    const { passwordHash, ...safe } = customer;
+    const { passwordHash: _passwordHash, ...safe } = customer;
     return safe;
   }
 }

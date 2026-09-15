@@ -34,11 +34,7 @@ export function priceLineItem(unitPrice: number, quantity: number, taxes: TaxLin
 }
 
 /** Ported from legacy StoreController@whatsapp — discount computed on (subtotal + tax). */
-export function applyCouponDiscount(
-  taxedTotal: number,
-  discountType: DiscountType,
-  discountValue: number,
-): number {
+export function applyCouponDiscount(taxedTotal: number, discountType: DiscountType, discountValue: number): number {
   const discount = discountType === 'PERCENTAGE' ? (taxedTotal / 100) * discountValue : discountValue;
   return round2(Math.min(discount, taxedTotal));
 }

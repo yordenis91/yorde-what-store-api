@@ -97,12 +97,16 @@ function createPrismaDouble(options: {
       findFirst: jest.fn().mockResolvedValue(options.shipping ?? null),
     },
     order: {
-      create: jest.fn().mockImplementation(({ data }: { data: Record<string, unknown> }) =>
-        Promise.resolve({ id: 'order-1', items: [], ...data, ...options.order }),
-      ),
-      update: jest.fn().mockImplementation(({ data }: { data: Record<string, unknown> }) =>
-        Promise.resolve({ ...(options.order ?? {}), ...data }),
-      ),
+      create: jest
+        .fn()
+        .mockImplementation(({ data }: { data: Record<string, unknown> }) =>
+          Promise.resolve({ id: 'order-1', items: [], ...data, ...options.order }),
+        ),
+      update: jest
+        .fn()
+        .mockImplementation(({ data }: { data: Record<string, unknown> }) =>
+          Promise.resolve({ ...(options.order ?? {}), ...data }),
+        ),
       findFirst: jest.fn().mockResolvedValue(options.order ?? null),
       findMany: jest.fn().mockResolvedValue(options.orders ?? []),
       count: jest.fn().mockResolvedValue(0),
@@ -161,11 +165,21 @@ describe('OrdersService pricing', () => {
    */
   it('quotes exactly what an identical order is charged', async () => {
     const products = [buildProduct({ taxes: [{ tax: { name: 'VAT', rate: '21' } }] })];
-    const coupon = { id: 'c1', code: 'SUMMER10', discountType: 'PERCENTAGE', discountValue: '10', expiresAt: null, usageLimit: null, usageCount: 0 };
+    const coupon = {
+      id: 'c1',
+      code: 'SUMMER10',
+      discountType: 'PERCENTAGE',
+      discountValue: '10',
+      expiresAt: null,
+      usageLimit: null,
+      usageCount: 0,
+    };
     const shipping = { id: 's1', name: 'Delivery', cost: '5.00' };
     const payload = { items: [{ productId: 'p1', quantity: 2 }], couponCode: 'SUMMER10', shippingId: 's1' };
 
-    const quote = await (await buildService(createPrismaDouble({ products, coupon, shipping }))).quote(TENANT_ID, payload);
+    const quote = await (
+      await buildService(createPrismaDouble({ products, coupon, shipping }))
+    ).quote(TENANT_ID, payload);
 
     const orderDouble = createPrismaDouble({ products, coupon, shipping });
     await (await buildService(orderDouble)).create(TENANT_ID, { ...baseOrder, ...payload });
@@ -186,7 +200,15 @@ describe('OrdersService pricing', () => {
    * when the order was placed.
    */
   it('matches coupon codes case-insensitively', async () => {
-    const coupon = { id: 'c1', code: 'SUMMER10', discountType: 'PERCENTAGE', discountValue: '10', expiresAt: null, usageLimit: null, usageCount: 0 };
+    const coupon = {
+      id: 'c1',
+      code: 'SUMMER10',
+      discountType: 'PERCENTAGE',
+      discountValue: '10',
+      expiresAt: null,
+      usageLimit: null,
+      usageCount: 0,
+    };
     const double = createPrismaDouble({ coupon });
     const service = await buildService(double);
 
@@ -218,8 +240,24 @@ describe('OrdersService pricing', () => {
   });
 
   it('rejects an expired coupon and one past its usage limit', async () => {
-    const expired = { id: 'c1', code: 'OLD', discountType: 'PERCENTAGE', discountValue: '10', expiresAt: new Date('2020-01-01'), usageLimit: null, usageCount: 0 };
-    const usedUp = { id: 'c2', code: 'GONE', discountType: 'PERCENTAGE', discountValue: '10', expiresAt: null, usageLimit: 5, usageCount: 5 };
+    const expired = {
+      id: 'c1',
+      code: 'OLD',
+      discountType: 'PERCENTAGE',
+      discountValue: '10',
+      expiresAt: new Date('2020-01-01'),
+      usageLimit: null,
+      usageCount: 0,
+    };
+    const usedUp = {
+      id: 'c2',
+      code: 'GONE',
+      discountType: 'PERCENTAGE',
+      discountValue: '10',
+      expiresAt: null,
+      usageLimit: 5,
+      usageCount: 5,
+    };
 
     const a = await buildService(createPrismaDouble({ coupon: expired }));
     await expect(a.quote(TENANT_ID, { items: baseOrder.items, couponCode: 'OLD' })).resolves.toMatchObject({
@@ -545,9 +583,7 @@ describe('OrdersService live events', () => {
 
     await service.create(TENANT_ID, { ...baseOrder, fulfillmentMethod: 'WHATSAPP' });
 
-    expect(events).toEqual([
-      { type: 'order.created', order: expect.objectContaining({ status: 'CONFIRMED' }) },
-    ]);
+    expect(events).toEqual([{ type: 'order.created', order: expect.objectContaining({ status: 'CONFIRMED' }) }]);
   });
 
   it('does not announce an order that was rejected before it was ever created', async () => {
@@ -572,7 +608,7 @@ describe('OrdersService live events', () => {
     ]);
   });
 
-  it('keeps tenants apart: one tenant never sees another tenant\'s order events', async () => {
+  it("keeps tenants apart: one tenant never sees another tenant's order events", async () => {
     const service = await buildService(createPrismaDouble({}));
     const eventsForOtherTenant = collectEvents(service, 'some-other-tenant');
 

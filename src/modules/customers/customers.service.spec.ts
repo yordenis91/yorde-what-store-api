@@ -16,9 +16,11 @@ function createPrismaDouble(options: {
 
   const db = {
     customer: {
-      findFirst: jest.fn().mockImplementation(({ where }: { where: { id: string } }) =>
-        Promise.resolve((options.customers ?? []).find((c) => c.id === where.id) ?? null),
-      ),
+      findFirst: jest
+        .fn()
+        .mockImplementation(({ where }: { where: { id: string } }) =>
+          Promise.resolve((options.customers ?? []).find((c) => c.id === where.id) ?? null),
+        ),
       findMany: jest.fn().mockResolvedValue(options.customers ?? []),
       count: jest.fn().mockResolvedValue(options.customerCount ?? (options.customers ?? []).length),
     },
@@ -71,7 +73,12 @@ describe('CustomersService admin list', () => {
         { id: 'c2', name: 'Bob', email: 'bob@x.com', phone: null, createdAt: new Date('2024-01-02') },
       ],
       orderGroups: [
-        { customerId: 'c1', _count: { _all: 3 }, _sum: { grandTotal: '150.00' }, _max: { createdAt: new Date('2024-03-01') } },
+        {
+          customerId: 'c1',
+          _count: { _all: 3 },
+          _sum: { grandTotal: '150.00' },
+          _max: { createdAt: new Date('2024-03-01') },
+        },
       ],
     });
     const service = await buildService(double);
@@ -89,7 +96,9 @@ describe('CustomersService admin list', () => {
   it('classifies segments from order count: 0-1 new, 2-4 recurring, 5+ vip', async () => {
     const double = createPrismaDouble({
       customers: [{ id: 'c1', name: 'Ana', email: null, phone: null, createdAt: new Date() }],
-      orderGroups: [{ customerId: 'c1', _count: { _all: 5 }, _sum: { grandTotal: '900.00' }, _max: { createdAt: new Date() } }],
+      orderGroups: [
+        { customerId: 'c1', _count: { _all: 5 }, _sum: { grandTotal: '900.00' }, _max: { createdAt: new Date() } },
+      ],
     });
     const service = await buildService(double);
 
@@ -104,9 +113,7 @@ describe('CustomersService admin list', () => {
 
     await service.findAll(TENANT_ID, { segment: 'vip', page: 1, limit: 20, skip: 0 } as any);
 
-    expect(double.groupByCalls[0]).toEqual(
-      expect.objectContaining({ having: { id: { _count: { gte: 5 } } } }),
-    );
+    expect(double.groupByCalls[0]).toEqual(expect.objectContaining({ having: { id: { _count: { gte: 5 } } } }));
     expect(double.db.customer.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: expect.objectContaining({ id: { in: ['c9'] } }) }),
     );
@@ -118,9 +125,7 @@ describe('CustomersService admin list', () => {
 
     await service.findAll(TENANT_ID, { segment: 'recurring', page: 1, limit: 20, skip: 0 } as any);
 
-    expect(double.groupByCalls[0]).toEqual(
-      expect.objectContaining({ having: { id: { _count: { gte: 2, lte: 4 } } } }),
-    );
+    expect(double.groupByCalls[0]).toEqual(expect.objectContaining({ having: { id: { _count: { gte: 2, lte: 4 } } } }));
   });
 
   /** New must include customers with zero orders, who never appear in a groupBy over Order at all. */
@@ -141,7 +146,14 @@ describe('CustomersService admin detail', () => {
   it('returns the customer profile, its stats and its order history', async () => {
     const double = createPrismaDouble({
       customers: [{ id: 'c1', name: 'Ana', email: 'ana@x.com', phone: null, createdAt: new Date() }],
-      orderGroups: [{ customerId: 'c1', _count: { _all: 2 }, _sum: { grandTotal: '80.00' }, _max: { createdAt: new Date('2024-02-01') } }],
+      orderGroups: [
+        {
+          customerId: 'c1',
+          _count: { _all: 2 },
+          _sum: { grandTotal: '80.00' },
+          _max: { createdAt: new Date('2024-02-01') },
+        },
+      ],
       orders: [{ id: 'o1', orderNumber: 'ORD-1' }],
     });
     const service = await buildService(double);

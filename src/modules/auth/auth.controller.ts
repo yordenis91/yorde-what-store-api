@@ -1,13 +1,4 @@
-import {
-  BadRequestException,
-  Body,
-  Controller,
-  Get,
-  Post,
-  Req,
-  Res,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Post, Req, Res, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiTags } from '@nestjs/swagger';
 import { Request, Response } from 'express';
@@ -69,11 +60,7 @@ export class AuthController {
   }
 
   @Post('logout')
-  async logout(
-    @CurrentUser() user: AuthenticatedUser,
-    @Req() req: Request,
-    @Res({ passthrough: true }) res: Response,
-  ) {
+  async logout(@CurrentUser() user: AuthenticatedUser, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const token = req.cookies?.[REFRESH_COOKIE];
     const result = await this.authService.logout(user.id, token);
     res.clearCookie(REFRESH_COOKIE);
@@ -81,7 +68,11 @@ export class AuthController {
   }
 
   @Post('switch-tenant')
-  async switchTenant(@CurrentUser() user: AuthenticatedUser, @Body() dto: SwitchTenantDto, @Res({ passthrough: true }) res: Response) {
+  async switchTenant(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: SwitchTenantDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const { refreshToken, ...rest } = await this.authService.switchTenant(user.id, dto.tenantId);
     this.setRefreshCookie(res, refreshToken);
     return rest;

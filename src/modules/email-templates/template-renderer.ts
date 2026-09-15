@@ -6,8 +6,5 @@
  * variables, so this takes a plain map instead of a typed context.
  */
 export function renderTemplate(template: string, variables: Record<string, string>): string {
-  return Object.entries(variables).reduce(
-    (result, [key, value]) => result.replaceAll(`{${key}}`, value),
-    template,
-  );
+  return Object.entries(variables).reduce((result, [key, value]) => result.replaceAll(`{${key}}`, value), template);
 }

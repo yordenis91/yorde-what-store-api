@@ -1,4 +1,10 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { decryptSecret, encryptSecret } from '../../common/utils/crypto.util';
@@ -98,7 +104,7 @@ export class TenantsService {
 
   async listPaymentSettings(tenantId: string) {
     const settings = await this.prisma.db.tenantPaymentSetting.findMany({ where: { tenantId } });
-    return settings.map(({ credentials, ...rest }) => rest);
+    return settings.map(({ credentials: _credentials, ...rest }) => rest);
   }
 
   /** Internal use only (payments module) — never exposed over the API. */

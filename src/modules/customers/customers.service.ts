@@ -86,7 +86,10 @@ export class CustomersService {
       this.prisma.db.customer.count({ where }),
     ]);
 
-    const stats = await this.orderStatsFor(tenantId, items.map((c) => c.id));
+    const stats = await this.orderStatsFor(
+      tenantId,
+      items.map((c) => c.id),
+    );
 
     return {
       items: items.map((customer) => ({ ...customer, ...(stats.get(customer.id) ?? emptyStats()) })),
@@ -153,7 +156,10 @@ export class CustomersService {
    */
   private async segmentFilter(tenantId: string, segment: CustomerSegment): Promise<Record<string, unknown>> {
     if (segment === 'recurring') {
-      const ids = await this.customerIdsWithOrderCount(tenantId, { gte: RECURRING_MIN_ORDERS, lte: VIP_MIN_ORDERS - 1 });
+      const ids = await this.customerIdsWithOrderCount(tenantId, {
+        gte: RECURRING_MIN_ORDERS,
+        lte: VIP_MIN_ORDERS - 1,
+      });
       return { id: { in: ids } };
     }
     if (segment === 'vip') {

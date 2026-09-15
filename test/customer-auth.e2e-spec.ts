@@ -35,7 +35,10 @@ describe('Customer auth (e2e)', () => {
     });
   });
 
-  async function registerCustomer(tenantId: string, overrides: Partial<{ email: string; password: string; name: string }> = {}) {
+  async function registerCustomer(
+    tenantId: string,
+    overrides: Partial<{ email: string; password: string; name: string }> = {},
+  ) {
     const res = await request(app.getHttpServer())
       .post('/api/v1/storefront/customers/auth/register')
       .set('X-Tenant-ID', tenantId)

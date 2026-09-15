@@ -27,8 +27,9 @@ function createPrismaDouble(seed: FakeTemplate[] = []) {
       if (where.id) return rows.get(where.id) ?? null;
       return [...rows.values()].find((t) => t.slug === where.slug) ?? null;
     }),
-    findFirst: jest.fn(async ({ where }: { where: { isActive?: boolean } }) =>
-      [...rows.values()].find((t) => (where.isActive === undefined ? true : t.isActive === where.isActive)) ?? null,
+    findFirst: jest.fn(
+      async ({ where }: { where: { isActive?: boolean } }) =>
+        [...rows.values()].find((t) => (where.isActive === undefined ? true : t.isActive === where.isActive)) ?? null,
     ),
     create: jest.fn(async ({ data }: { data: Omit<FakeTemplate, 'id' | 'isActive'> & { isActive?: boolean } }) => {
       const row: FakeTemplate = { id: `t${nextId++}`, isActive: true, ...data };
@@ -93,7 +94,9 @@ describe('CategoryTemplatesService', () => {
   });
 
   it('rejects a category becoming its own parent', async () => {
-    const double = createPrismaDouble([{ id: 't1', name: 'Ropa', slug: 'ropa', parentId: null, sortOrder: 0, isActive: true }]);
+    const double = createPrismaDouble([
+      { id: 't1', name: 'Ropa', slug: 'ropa', parentId: null, sortOrder: 0, isActive: true },
+    ]);
     const service = await buildService(double);
 
     await expect(service.update('t1', { parentId: 't1' })).rejects.toThrow(BadRequestException);

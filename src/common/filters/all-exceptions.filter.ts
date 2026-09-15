@@ -38,7 +38,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
   private resolve(exception: unknown): { status: number; message: string | string[]; code: string } {
     if (exception instanceof HttpException) {
       const body = exception.getResponse();
-      const message = typeof body === 'string' ? body : (body as any).message ?? exception.message;
+      const message = typeof body === 'string' ? body : ((body as any).message ?? exception.message);
       return { status: exception.getStatus(), message, code: exception.constructor.name };
     }
 

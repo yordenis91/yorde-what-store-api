@@ -3,7 +3,14 @@ import { ApiTags } from '@nestjs/swagger';
 import { CurrentTenantId, Public, Roles } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
 import { ProductsService } from './products.service';
-import { CreateProductDto, UpdateProductDto, CreateCategoryDto, CreateTaxDto, AddProductImageDto, ProductQueryDto } from './dto';
+import {
+  CreateProductDto,
+  UpdateProductDto,
+  CreateCategoryDto,
+  CreateTaxDto,
+  AddProductImageDto,
+  ProductQueryDto,
+} from './dto';
 import { CreateCategoryFromTemplateDto } from '../category-templates/dto';
 
 @ApiTags('storefront-products')

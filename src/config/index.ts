@@ -3,7 +3,10 @@ import { registerAs } from '@nestjs/config';
 export const appConfig = registerAs('app', () => ({
   port: parseInt(process.env.PORT ?? '3000', 10),
   prefix: process.env.API_PREFIX ?? 'api/v1',
-  corsOrigins: (process.env.CORS_ORIGINS ?? '').split(',').map((o) => o.trim()).filter(Boolean),
+  corsOrigins: (process.env.CORS_ORIGINS ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean),
   env: process.env.NODE_ENV ?? 'development',
 }));
 

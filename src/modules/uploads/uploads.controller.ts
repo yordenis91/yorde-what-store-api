@@ -80,11 +80,7 @@ export class UploadsController {
       },
     }),
   )
-  async uploadImage(
-    @UploadedFile() file: Express.Multer.File,
-    @Body() dto: UploadImageDto,
-    @Req() req: TenantRequest,
-  ) {
+  async uploadImage(@UploadedFile() file: Express.Multer.File, @Body() dto: UploadImageDto, @Req() req: TenantRequest) {
     if (!file) throw new BadRequestException('No file uploaded');
 
     const tenantId = req.tenantId!;

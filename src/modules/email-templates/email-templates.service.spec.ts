@@ -10,7 +10,9 @@ const TENANT_ID = 'tenant-1';
  * through withTenant rather than `prisma.db` — this double mirrors that by
  * handing withTenant's callback a `tx` with a stubbed `emailTemplate` model.
  */
-function buildService(rows: { tenantId: string | null; key: string; locale: string; subject: string; body: string; isActive?: boolean }[]) {
+function buildService(
+  rows: { tenantId: string | null; key: string; locale: string; subject: string; body: string; isActive?: boolean }[],
+) {
   const findFirst = jest.fn(({ where }: { where: Record<string, unknown> }) => {
     const match = rows.find(
       (r) =>
@@ -65,7 +67,14 @@ describe('resolveForSend', () => {
 
   it('ignores a deactivated override and falls through to the global default', async () => {
     const service = await buildService([
-      { tenantId: TENANT_ID, key: 'staff-invite', locale: 'en', subject: 'Disabled subject', body: 'x', isActive: false },
+      {
+        tenantId: TENANT_ID,
+        key: 'staff-invite',
+        locale: 'en',
+        subject: 'Disabled subject',
+        body: 'x',
+        isActive: false,
+      },
       { tenantId: null, key: 'staff-invite', locale: 'en', subject: 'Global subject', body: 'Global body' },
     ]);
 
