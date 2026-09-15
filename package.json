@@ -23,7 +23,8 @@
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:seed": "ts-node prisma/seed.ts",
-    "prisma:seed:prod": "node dist-seed/prisma/seed.js"
+    "prisma:seed:prod": "node dist-seed/prisma/seed.js",
+    "smoke:smtp": "ts-node scripts/smoke/smtp-smoke-test.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"

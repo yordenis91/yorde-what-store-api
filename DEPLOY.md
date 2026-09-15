@@ -78,6 +78,33 @@ existe en la imagen de producción. Por eso el Dockerfile precompila
 que `tsc` calcula la raíz común de ambos como la raíz del repo) y `:prod`
 ejecuta esa versión.
 
+## Smoke tests contra servicios externos reales
+
+Los tests unitarios y e2e corren contra dobles/Postgres+Redis locales — nunca
+contra Stripe o un SMTP real. Para verificar que las credenciales de
+producción realmente funcionan (después de rotarlas, o antes de un deploy que
+las toca), hay un smoke test dedicado que no corre en CI porque necesita
+salida de red real:
+
+```bash
+SMTP_HOST=... SMTP_PORT=587 SMTP_USER=... SMTP_PASSWORD=... \
+MAIL_FROM=no-reply@tudominio.com SMOKE_TEST_TO=vos@tudominio.com \
+npm run smoke:smtp
+```
+
+Usa exactamente la misma config de transporte que `EmailProcessor`
+(`src/queue/processors/email.processor.ts`), así que un pase acá es señal
+directa de que el envío real funciona con esas credenciales. Falla con un
+mensaje claro si falta una var, si el host no resuelve, o si la
+autenticación es rechazada — no hace falta leer logs de BullMQ para
+diagnosticarlo.
+
+Para Stripe no hay script aparte: `stripe.checkout.sessions.create` con una
+`STRIPE_SECRET_KEY` inválida ya devuelve un error real y legible del lado de
+Stripe (probado manualmente contra la API real durante el desarrollo del
+adapter de MercadoPago) — alcanza con crear un checkout de prueba desde el
+storefront en modo test.
+
 ## Notas de la imagen
 
 - Base `node:22-slim` en lugar de Alpine: `bcrypt` resuelve su binario nativo
