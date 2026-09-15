@@ -126,6 +126,24 @@ con más de ~120 requests/minuto desde una sola máquina de prueba el 429 dejar�
 de medir la API y empezaría a medir el rate limiter. Subí `THROTTLE_LIMIT`
 temporalmente al correr este script (nunca en producción).
 
+**Contra producción real**: el escenario 3 (`POST /storefront/orders`) crea
+órdenes de verdad — y descuenta stock real si el tenant tiene
+`tracksInventory` activo. Contra un tenant real, corré solo los escenarios de
+lectura con `SKIP_ORDER_SCENARIO=true`:
+
+```bash
+BASE_URL=https://api.tudominio.com/api/v1 \
+TENANT_ID=<uuid-del-tenant-real> \
+SKIP_ORDER_SCENARIO=true \
+CONNECTIONS=20 DURATION=20 \
+npm run load:storefront
+```
+
+El escenario de escritura solo tiene sentido correrlo contra un tenant
+descartable (uno de prueba, no un comercio real) — si tenés uno, pasale
+`PRODUCT_ID` y sacá `SKIP_ORDER_SCENARIO` para incluirlo, y borrá después las
+órdenes que genere (quedan con `customerName = 'Load Test Customer'`).
+
 **Referencia — primera corrida** (2026-09-15, contenedor sandbox compartido,
 un solo proceso Node + Postgres/Redis locales; no representa el hardware de
 producción, sirve como línea base para detectar regresiones futuras):

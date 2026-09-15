@@ -12,14 +12,20 @@
  *   TENANT_ID=<tenant-uuid> PRODUCT_ID=<product-uuid> \
  *   CONNECTIONS=25 DURATION=20 \
  *   npx ts-node scripts/load/storefront-load-test.ts
+ *
+ * SKIP_ORDER_SCENARIO=true drops scenario 3. Scenario 3 creates REAL orders
+ * (and decrements real stock if the tenant tracks inventory) — set this when
+ * TENANT_ID points at a real production store you don't want polluted with
+ * test orders. Scenarios 1-2 are read-only and safe against production.
  */
 import autocannon, { Result } from 'autocannon';
 
 const baseUrl = process.env.BASE_URL ?? 'http://localhost:3000/api/v1';
 const tenantId = requireEnv('TENANT_ID');
-const productId = requireEnv('PRODUCT_ID');
+const productId = process.env.SKIP_ORDER_SCENARIO === 'true' ? undefined : requireEnv('PRODUCT_ID');
 const connections = parseInt(process.env.CONNECTIONS ?? '25', 10);
 const duration = parseInt(process.env.DURATION ?? '20', 10);
+const skipOrderScenario = process.env.SKIP_ORDER_SCENARIO === 'true';
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -71,22 +77,26 @@ async function main() {
     ),
   );
 
-  results.push(
-    await run(
-      {
-        url: `${baseUrl}/storefront/orders`,
-        method: 'POST',
-        headers: { 'x-tenant-id': tenantId, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          customerName: 'Load Test Customer',
-          customerPhone: '+15551234567',
-          fulfillmentMethod: 'WHATSAPP',
-          items: [{ productId, quantity: 1 }],
-        }),
-      },
-      'Scenario 3: POST /storefront/orders (write — pricing + DB transaction + RLS)',
-    ),
-  );
+  if (skipOrderScenario) {
+    console.log('\nScenario 3 (order creation) skipped — SKIP_ORDER_SCENARIO=true.');
+  } else {
+    results.push(
+      await run(
+        {
+          url: `${baseUrl}/storefront/orders`,
+          method: 'POST',
+          headers: { 'x-tenant-id': tenantId, 'content-type': 'application/json' },
+          body: JSON.stringify({
+            customerName: 'Load Test Customer',
+            customerPhone: '+15551234567',
+            fulfillmentMethod: 'WHATSAPP',
+            items: [{ productId, quantity: 1 }],
+          }),
+        },
+        'Scenario 3: POST /storefront/orders (write — pricing + DB transaction + RLS)',
+      ),
+    );
+  }
 
   console.log('\n=== Summary ===');
   for (const r of results) {
