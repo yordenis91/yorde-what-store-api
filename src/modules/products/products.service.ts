@@ -1,8 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PaginatedResult } from '../../common/dto/pagination.dto';
 import { CategoryTemplatesService } from '../category-templates/category-templates.service';
+import { PlansService } from '../plans/plans.service';
 import { CreateProductDto, UpdateProductDto, CreateCategoryDto, CreateTaxDto, AddProductImageDto, ProductQueryDto } from './dto';
 
 function sortToOrderBy(sort?: string): Prisma.ProductOrderByWithRelationInput {
@@ -23,9 +24,12 @@ export class ProductsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly categoryTemplatesService: CategoryTemplatesService,
+    private readonly plansService: PlansService,
   ) {}
 
   async create(tenantId: string, dto: CreateProductDto) {
+    await this.assertUnderProductLimit(tenantId);
+
     const { categoryIds = [], taxIds = [], variants = [], ...data } = dto;
     return this.prisma.db.product.create({
       data: {
@@ -38,6 +42,18 @@ export class ProductsService {
       } as any,
       include: PRODUCT_INCLUDE,
     });
+  }
+
+  /** Mirrors the maxStores check in TenantsService.createAdditional — same fallback shape (Free plan's own limit) for a tenant with no subscription row at all. -1 means unlimited (Business plan). */
+  private async assertUnderProductLimit(tenantId: string) {
+    const subscription = await this.plansService.currentSubscription(tenantId);
+    const maxProducts = subscription?.plan.maxProducts ?? 20;
+    if (maxProducts === -1) return;
+
+    const currentCount = await this.prisma.db.product.count({ where: { tenantId } });
+    if (currentCount >= maxProducts) {
+      throw new ForbiddenException(`Product limit reached for your current plan (${maxProducts})`);
+    }
   }
 
   async findAll(tenantId: string, query: ProductQueryDto): Promise<PaginatedResult<any>> {
