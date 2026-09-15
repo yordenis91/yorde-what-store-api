@@ -89,4 +89,16 @@ export class PaymentsService {
 
     return { received: true };
   }
+
+  /** Reverses the actual Stripe charge — used by OrdersService when a paid order's status moves to REFUNDED. Never called for orders fulfilled outside Stripe; there is no online charge to reverse. */
+  async refundPaymentIntent(tenantId: string, paymentIntentId: string) {
+    const credentials = await this.tenantsService.getDecryptedCredentials(tenantId, 'STRIPE');
+    try {
+      await this.stripeAdapter.refund(paymentIntentId, credentials);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      this.logger.warn(`Stripe refund failed for payment intent ${paymentIntentId}: ${message}`);
+      throw new BadRequestException(`Stripe could not process this refund: ${message}`);
+    }
+  }
 }

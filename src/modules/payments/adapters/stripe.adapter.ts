@@ -49,4 +49,12 @@ export class StripeAdapter implements PaymentAdapter {
     const webhookSecret = this.config.get<string>('stripe.webhookSecret')!;
     return this.stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);
   }
+
+  async refund(providerPaymentId: string, credentials: Record<string, string> | null): Promise<void> {
+    const connectedAccountId = credentials?.connectedAccountId;
+    await this.stripe.refunds.create(
+      { payment_intent: providerPaymentId },
+      connectedAccountId ? { stripeAccount: connectedAccountId } : undefined,
+    );
+  }
 }

@@ -5,6 +5,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { EMAIL_QUEUE, ORDER_NOTIFICATION_QUEUE } from '../../queue/queue.constants';
 import { OrdersService } from './orders.service';
 import { OrderEvent, OrderEventsService } from './order-events.service';
+import { PaymentsService } from '../payments/payments.service';
 
 /**
  * These run against a hand-built Prisma double rather than a database. That
@@ -47,6 +48,8 @@ function createPrismaDouble(options: {
   coupon?: Record<string, unknown> | null;
   shipping?: Record<string, unknown> | null;
   order?: Record<string, unknown>;
+  /** Rows a listing/export query (order.findMany with no create/update in play) should return. */
+  orders?: Record<string, unknown>[];
   /** Rows each conditional stock update reports as changed, in call order. */
   stockUpdateCounts?: number[];
 }) {
@@ -101,7 +104,7 @@ function createPrismaDouble(options: {
         Promise.resolve({ ...(options.order ?? {}), ...data }),
       ),
       findFirst: jest.fn().mockResolvedValue(options.order ?? null),
-      findMany: jest.fn().mockResolvedValue([]),
+      findMany: jest.fn().mockResolvedValue(options.orders ?? []),
       count: jest.fn().mockResolvedValue(0),
     },
   };
@@ -109,7 +112,7 @@ function createPrismaDouble(options: {
   return { db, stockUpdates, tenant };
 }
 
-async function buildService(double: ReturnType<typeof createPrismaDouble>) {
+async function buildService(double: ReturnType<typeof createPrismaDouble>, paymentsService?: Partial<PaymentsService>) {
   const moduleRef = await Test.createTestingModule({
     providers: [
       OrdersService,
@@ -117,6 +120,7 @@ async function buildService(double: ReturnType<typeof createPrismaDouble>) {
       { provide: PrismaService, useValue: { db: double.db, tenant: double.db.tenant } },
       { provide: getQueueToken(ORDER_NOTIFICATION_QUEUE), useValue: { add: jest.fn() } },
       { provide: getQueueToken(EMAIL_QUEUE), useValue: { add: jest.fn() } },
+      { provide: PaymentsService, useValue: { refundPaymentIntent: jest.fn(), ...paymentsService } },
     ],
   }).compile();
 
@@ -421,6 +425,104 @@ describe('OrdersService cancellation', () => {
     await service.updateStatus(TENANT_ID, 'order-1', 'COMPLETED');
 
     expect(double.stockUpdates).toHaveLength(0);
+  });
+});
+
+/**
+ * `REFUNDED` used to be a status label with nothing behind it — changing it
+ * never called Stripe, so the merchant saw "Refunded" while the customer's
+ * card was never credited. These pin the real refund call, and that it never
+ * fires for an order with no online charge to reverse.
+ */
+describe('OrdersService refunds', () => {
+  const paidOrder = {
+    id: 'order-1',
+    status: 'CONFIRMED',
+    paymentStatus: 'PAID',
+    stripePaymentIntentId: 'pi_123',
+    items: [],
+  };
+
+  it('refunds the real Stripe charge for a paid order and records it', async () => {
+    const double = createPrismaDouble({ order: paidOrder });
+    const refundPaymentIntent = jest.fn().mockResolvedValue(undefined);
+    const service = await buildService(double, { refundPaymentIntent });
+
+    const updated = await service.updateStatus(TENANT_ID, 'order-1', 'REFUNDED');
+
+    expect(refundPaymentIntent).toHaveBeenCalledWith(TENANT_ID, 'pi_123');
+    expect(updated).toMatchObject({ status: 'REFUNDED', paymentStatus: 'REFUNDED' });
+  });
+
+  it('does not call Stripe for an order with no online charge (WhatsApp/Telegram)', async () => {
+    const double = createPrismaDouble({
+      order: { id: 'order-1', status: 'CONFIRMED', paymentStatus: 'PENDING', stripePaymentIntentId: null, items: [] },
+    });
+    const refundPaymentIntent = jest.fn();
+    const service = await buildService(double, { refundPaymentIntent });
+
+    const updated = await service.updateStatus(TENANT_ID, 'order-1', 'REFUNDED');
+
+    expect(refundPaymentIntent).not.toHaveBeenCalled();
+    expect(updated).toMatchObject({ status: 'REFUNDED' });
+  });
+
+  it('does not refund a charge twice when an already-refunded order is refunded again', async () => {
+    const double = createPrismaDouble({
+      order: { ...paidOrder, status: 'REFUNDED', paymentStatus: 'REFUNDED' },
+    });
+    const refundPaymentIntent = jest.fn();
+    const service = await buildService(double, { refundPaymentIntent });
+
+    await service.updateStatus(TENANT_ID, 'order-1', 'REFUNDED');
+
+    expect(refundPaymentIntent).not.toHaveBeenCalled();
+  });
+});
+
+describe('OrdersService.exportCsv', () => {
+  const exportableOrder = {
+    orderNumber: 'ORD-1',
+    createdAt: new Date('2026-01-15T10:00:00.000Z'),
+    customerName: 'Ana',
+    customerEmail: 'ana@example.com',
+    customerPhone: '+15551234567',
+    status: 'COMPLETED',
+    paymentStatus: 'PAID',
+    fulfillmentMethod: 'STRIPE',
+    currency: 'USD',
+    subtotal: 50,
+    taxTotal: 5,
+    discountTotal: 0,
+    shippingTotal: 0,
+    grandTotal: 55,
+  };
+
+  it('renders matching orders as CSV, one row per order', async () => {
+    const double = createPrismaDouble({ orders: [exportableOrder] });
+    const service = await buildService(double);
+
+    const csv = await service.exportCsv(TENANT_ID, {});
+
+    expect(csv).toContain('Order number');
+    expect(csv).toContain('ORD-1,2026-01-15T10:00:00.000Z,Ana,ana@example.com');
+    expect(csv).toContain(',55');
+  });
+
+  it('applies the same search/status/date filters as the listing, not its pagination', async () => {
+    const double = createPrismaDouble({ orders: [] });
+    const service = await buildService(double);
+
+    await service.exportCsv(TENANT_ID, { search: 'Ana', status: 'COMPLETED' as any });
+
+    expect(double.db.order.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ status: 'COMPLETED', tenantId: TENANT_ID }),
+      }),
+    );
+    const call = double.db.order.findMany.mock.calls[0][0];
+    expect(call.skip).toBeUndefined();
+    expect(call.take).toBeGreaterThan(100);
   });
 });
 

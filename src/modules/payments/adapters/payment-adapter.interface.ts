@@ -23,6 +23,8 @@ export interface PaymentAdapter {
     credentials: Record<string, string> | null,
     urls: { successUrl: string; cancelUrl: string },
   ): Promise<CreateCheckoutResult>;
+  /** Reverses a completed charge. `providerPaymentId` is whatever createCheckout's result led to being stored as the order's payment reference (Stripe: the PaymentIntent id). */
+  refund(providerPaymentId: string, credentials: Record<string, string> | null): Promise<void>;
 }
 
 export const PAYMENT_ADAPTERS = 'PAYMENT_ADAPTERS';

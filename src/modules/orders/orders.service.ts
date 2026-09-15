@@ -5,6 +5,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PaginatedResult } from '../../common/dto/pagination.dto';
+import { toCsv } from '../../common/utils/csv.util';
 import { CreateOrderDto, OrderItemInputDto, OrderQueryDto, QuoteOrderDto } from './dto';
 import { applyCouponDiscount, priceLineItem, round2 } from './pricing.util';
 import { buildWhatsappUrl, renderItemLine, renderOrderMessage } from './fulfillment/message-renderer';
@@ -12,6 +13,7 @@ import { EMAIL_JOB_OPTIONS, EMAIL_QUEUE, ORDER_NOTIFICATION_QUEUE } from '../../
 import { EmailJobData } from '../../queue/processors/email.processor';
 import { getInvoicePath } from '../../queue/processors/invoice-storage.util';
 import { OrderEvent, OrderEventsService } from './order-events.service';
+import { PaymentsService } from '../payments/payments.service';
 
 const ORDER_INCLUDE = { items: true, coupon: true, shipping: true };
 
@@ -29,6 +31,7 @@ export class OrdersService {
     @InjectQueue(ORDER_NOTIFICATION_QUEUE) private readonly notificationQueue: Queue,
     @InjectQueue(EMAIL_QUEUE) private readonly emailQueue: Queue,
     private readonly orderEvents: OrderEventsService,
+    private readonly paymentsService: PaymentsService,
   ) {}
 
   /** Live-notification endpoint for the admin dashboard's SSE stream. */
@@ -348,7 +351,73 @@ export class OrdersService {
   }
 
   async findAll(tenantId: string, query: OrderQueryDto): Promise<PaginatedResult<any>> {
-    const where = {
+    const where = this.buildFilterWhere(tenantId, query);
+    const [items, total] = await Promise.all([
+      this.prisma.db.order.findMany({
+        where,
+        include: ORDER_INCLUDE,
+        skip: query.skip,
+        take: query.limit,
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.db.order.count({ where }),
+    ]);
+    return {
+      items,
+      meta: { page: query.page, limit: query.limit, total, totalPages: Math.ceil(total / query.limit) },
+    };
+  }
+
+  /**
+   * Same filters as findAll, ignoring its pagination — a merchant exporting
+   * "this month's orders" wants the whole match, not one page of it. Capped
+   * well above any real store's order volume so a very wide date range still
+   * returns promptly instead of streaming an unbounded table.
+   */
+  async exportCsv(tenantId: string, query: Pick<OrderQueryDto, 'search' | 'status' | 'dateFrom' | 'dateTo'>) {
+    const orders = await this.prisma.db.order.findMany({
+      where: this.buildFilterWhere(tenantId, query),
+      orderBy: { createdAt: 'desc' },
+      take: 20_000,
+    });
+
+    const headers = [
+      'Order number',
+      'Date',
+      'Customer name',
+      'Customer email',
+      'Customer phone',
+      'Status',
+      'Payment status',
+      'Fulfillment method',
+      'Currency',
+      'Subtotal',
+      'Tax',
+      'Discount',
+      'Shipping',
+      'Total',
+    ];
+    const rows = orders.map((o) => [
+      o.orderNumber,
+      o.createdAt.toISOString(),
+      o.customerName,
+      o.customerEmail,
+      o.customerPhone,
+      o.status,
+      o.paymentStatus,
+      o.fulfillmentMethod,
+      o.currency,
+      o.subtotal,
+      o.taxTotal,
+      o.discountTotal,
+      o.shippingTotal,
+      o.grandTotal,
+    ]);
+    return toCsv(headers, rows);
+  }
+
+  private buildFilterWhere(tenantId: string, query: Pick<OrderQueryDto, 'search' | 'status' | 'dateFrom' | 'dateTo'>) {
+    return {
       tenantId,
       ...(query.search
         ? {
@@ -368,20 +437,6 @@ export class OrdersService {
             },
           }
         : {}),
-    };
-    const [items, total] = await Promise.all([
-      this.prisma.db.order.findMany({
-        where,
-        include: ORDER_INCLUDE,
-        skip: query.skip,
-        take: query.limit,
-        orderBy: { createdAt: 'desc' },
-      }),
-      this.prisma.db.order.count({ where }),
-    ]);
-    return {
-      items,
-      meta: { page: query.page, limit: query.limit, total, totalPages: Math.ceil(total / query.limit) },
     };
   }
 
@@ -412,7 +467,18 @@ export class OrdersService {
       if (tenant.tracksInventory) await this.releaseStock(order.items);
     }
 
-    const updated = await this.prisma.db.order.update({ where: { id }, data: { status: status as any } });
+    const data: Record<string, unknown> = { status };
+
+    // A WhatsApp/Telegram order has no online charge to reverse — "Refunded"
+    // there is just a status label for money returned by other means. Only a
+    // Stripe-paid order has an actual charge, and only once: re-marking an
+    // already-refunded order REFUNDED must not call Stripe a second time.
+    if (status === 'REFUNDED' && order.paymentStatus === 'PAID' && order.stripePaymentIntentId) {
+      await this.paymentsService.refundPaymentIntent(tenantId, order.stripePaymentIntentId);
+      data.paymentStatus = 'REFUNDED';
+    }
+
+    const updated = await this.prisma.db.order.update({ where: { id }, data: data as any });
     this.orderEvents.emit(tenantId, this.toOrderEvent('order.status_updated', updated));
     return updated;
   }

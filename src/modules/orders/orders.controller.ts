@@ -42,6 +42,19 @@ export class OrdersController {
   }
 
   /**
+   * `@Res()` opts this out of the global TransformInterceptor's `{ success,
+   * data }` envelope — a CSV download needs the raw file body, not JSON.
+   * Registered before `:id` for the same reason as the invoice route below.
+   */
+  @Get('export')
+  async exportCsv(@CurrentTenantId() tenantId: string, @Query() query: OrderQueryDto, @Res() res: Response) {
+    const csv = await this.ordersService.exportCsv(tenantId, query);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="orders-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send(csv);
+  }
+
+  /**
    * Live feed for the dashboard: one named SSE event per order created or
    * updated for this tenant while the connection is open. Registered before
    * `:id` — Nest/Express match routes in declaration order, so "events"
