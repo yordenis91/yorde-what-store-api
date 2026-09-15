@@ -24,7 +24,8 @@
     "prisma:studio": "prisma studio",
     "prisma:seed": "ts-node prisma/seed.ts",
     "prisma:seed:prod": "node dist-seed/prisma/seed.js",
-    "smoke:smtp": "ts-node scripts/smoke/smtp-smoke-test.ts"
+    "smoke:smtp": "ts-node scripts/smoke/smtp-smoke-test.ts",
+    "load:storefront": "ts-node scripts/load/storefront-load-test.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
@@ -70,6 +71,7 @@
     "@nestjs/cli": "^10.4.9",
     "@nestjs/schematics": "^10.2.3",
     "@nestjs/testing": "^10.4.15",
+    "@types/autocannon": "^7.12.7",
     "@types/bcrypt": "^5.0.2",
     "@types/cookie-parser": "^1.4.8",
     "@types/express": "^5.0.0",
@@ -83,6 +85,7 @@
     "@types/supertest": "^7.2.1",
     "@typescript-eslint/eslint-plugin": "^8.18.1",
     "@typescript-eslint/parser": "^8.18.1",
+    "autocannon": "^8.0.0",
     "eslint": "^8.57.1",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-prettier": "^5.2.1",

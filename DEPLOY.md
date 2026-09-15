@@ -105,6 +105,43 @@ Stripe (probado manualmente contra la API real durante el desarrollo del
 adapter de MercadoPago) — alcanza con crear un checkout de prueba desde el
 storefront en modo test.
 
+## Prueba de carga
+
+`scripts/load/storefront-load-test.ts` corre `autocannon` contra la API real
+(Postgres/Redis reales, sin mocks) en tres escenarios secuenciales: `/health`
+como línea base, `GET /storefront/products` (el path de lectura pública con
+más tráfico) y `POST /storefront/orders` (el path de escritura más pesado:
+pricing, transacción y RLS en cada query).
+
+```bash
+BASE_URL=http://localhost:3000/api/v1 \
+TENANT_ID=<uuid-del-tenant> PRODUCT_ID=<uuid-de-un-producto-publicado> \
+CONNECTIONS=30 DURATION=20 \
+npm run load:storefront
+```
+
+El `ThrottlerGuard` global (ver `THROTTLE_LIMIT`/`THROTTLE_TTL_MS` más
+arriba) cuenta todo el tráfico del mismo IP contra un único balde, así que
+con más de ~120 requests/minuto desde una sola máquina de prueba el 429 dejaría
+de medir la API y empezaría a medir el rate limiter. Subí `THROTTLE_LIMIT`
+temporalmente al correr este script (nunca en producción).
+
+**Referencia — primera corrida** (2026-09-15, contenedor sandbox compartido,
+un solo proceso Node + Postgres/Redis locales; no representa el hardware de
+producción, sirve como línea base para detectar regresiones futuras):
+
+| Escenario | req/s | p50 | p95 | p99 | errores |
+|---|---|---|---|---|---|
+| `GET /health` | 2916 | 9ms | 17ms | 20ms | 0 |
+| `GET /storefront/products` | 565 | 51ms | 71ms | 77ms | 0 |
+| `POST /storefront/orders` | 347 | 84ms | 109ms | 116ms | 0 |
+
+Sin errores en ningún escenario a 30 conexiones concurrentes. La caída de
+throughput de lectura a escritura es esperable (la creación de orden hace
+pricing + una transacción con RLS en cada tabla que toca), pero p99 se
+mantiene bajo 120ms incluso ahí — no hay indicio de lock contention ni de
+que el pool de conexiones de Prisma sea el cuello de botella a esta escala.
+
 ## Notas de la imagen
 
 - Base `node:22-slim` en lugar de Alpine: `bcrypt` resuelve su binario nativo

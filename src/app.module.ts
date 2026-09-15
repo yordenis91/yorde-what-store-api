@@ -83,7 +83,12 @@ import { AppService } from './app.service';
     }),
     ThrottlerModule.forRootAsync({
       useFactory: () => ({
-        throttlers: [{ ttl: 60_000, limit: 120 }],
+        throttlers: [
+          {
+            ttl: parseInt(process.env.THROTTLE_TTL_MS ?? '60000', 10),
+            limit: parseInt(process.env.THROTTLE_LIMIT ?? '120', 10),
+          },
+        ],
         storage: new ThrottlerStorageRedisService(
           new Redis({
             host: process.env.REDIS_HOST ?? 'localhost',
