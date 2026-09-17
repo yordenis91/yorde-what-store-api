@@ -9,6 +9,7 @@ import {
   CreateCategoryDto,
   CreateTaxDto,
   AddProductImageDto,
+  ReorderProductImagesDto,
   ProductQueryDto,
 } from './dto';
 import { CreateCategoryFromTemplateDto } from '../category-templates/dto';
@@ -119,6 +120,11 @@ export class ProductsController {
   @Post(':id/images')
   addImage(@CurrentTenantId() tenantId: string, @Param('id') id: string, @Body() dto: AddProductImageDto) {
     return this.productsService.addImage(tenantId, id, dto);
+  }
+
+  @Patch(':id/images/reorder')
+  reorderImages(@CurrentTenantId() tenantId: string, @Param('id') id: string, @Body() dto: ReorderProductImagesDto) {
+    return this.productsService.reorderImages(tenantId, id, dto);
   }
 
   @Delete(':id/images/:imageId')

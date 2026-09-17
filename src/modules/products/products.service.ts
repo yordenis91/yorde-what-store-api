@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PaginatedResult } from '../../common/dto/pagination.dto';
@@ -10,6 +10,7 @@ import {
   CreateCategoryDto,
   CreateTaxDto,
   AddProductImageDto,
+  ReorderProductImagesDto,
   ProductQueryDto,
 } from './dto';
 
@@ -173,8 +174,15 @@ export class ProductsService {
     if (dto.isCover) {
       await this.prisma.db.productImage.updateMany({ where: { productId }, data: { isCover: false } });
     }
+    // Every row otherwise defaults to sortOrder 0, so newly uploaded images
+    // would tie with (and unpredictably interleave among) whatever's already
+    // there instead of appending after it.
+    const { _max } = await this.prisma.db.productImage.aggregate({
+      where: { productId },
+      _max: { sortOrder: true },
+    });
     return this.prisma.db.productImage.create({
-      data: { tenantId, productId, url: dto.url, isCover: dto.isCover ?? false },
+      data: { tenantId, productId, url: dto.url, isCover: dto.isCover ?? false, sortOrder: (_max.sortOrder ?? -1) + 1 },
     });
   }
 
@@ -189,6 +197,39 @@ export class ProductsService {
     const db = this.prisma.db;
     await db.productImage.updateMany({ where: { productId }, data: { isCover: false } });
     return db.productImage.update({ where: { id: imageId }, data: { isCover: true } });
+  }
+
+  /**
+   * `imageIds` must be exactly the product's current image ids, just
+   * reordered — rejecting anything else keeps a stray/foreign id (or a
+   * partial drag-and-drop payload dropped by a race) from silently
+   * corrupting sortOrder instead of failing loudly.
+   */
+  async reorderImages(tenantId: string, productId: string, dto: ReorderProductImagesDto) {
+    await this.findOne(tenantId, productId);
+    const existing = await this.prisma.db.productImage.findMany({
+      where: { productId },
+      select: { id: true },
+    });
+    const existingIds = new Set(existing.map((img) => img.id));
+    const requestedIds = new Set(dto.imageIds);
+    if (existingIds.size !== requestedIds.size || existing.some((img) => !requestedIds.has(img.id))) {
+      throw new BadRequestException("imageIds must match this product's current images exactly");
+    }
+
+    // Not this.prisma.db.$transaction(...): `.db` is already the tenant-scoped
+    // client for a transaction TenantScopeInterceptor opened around this whole
+    // request (see PrismaService.withTenant) — Prisma's interactive-transaction
+    // client doesn't expose $transaction itself, and nesting one isn't
+    // meaningful here anyway. Each update targets a different row, so plain
+    // concurrent writes are safe.
+    await Promise.all(
+      dto.imageIds.map((imageId, index) =>
+        this.prisma.db.productImage.update({ where: { id: imageId }, data: { sortOrder: index } }),
+      ),
+    );
+
+    return this.prisma.db.productImage.findMany({ where: { productId }, orderBy: { sortOrder: 'asc' } });
   }
 
   async listCategories(tenantId: string) {
