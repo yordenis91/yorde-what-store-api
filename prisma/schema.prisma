@@ -21,6 +21,18 @@ enum TenantMemberRole {
   STAFF
 }
 
+/// Platform-admin-facing lifecycle. `isActive` (below, on Tenant) stays the
+/// boolean every existing call site (storefront resolution, subdomain
+/// middleware, `findPublicBySlug`) already checks — it's derived from this
+/// (true only for ACTIVE) so none of those ~15 sites need to change.
+enum TenantStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  BANNED
+  TRIAL_EXPIRED
+}
+
 enum FulfillmentMethod {
   WHATSAPP
   TELEGRAM
@@ -89,6 +101,12 @@ model User {
   refreshTokens  RefreshToken[]
   passwordResets PasswordResetToken[]
   ownedTenants   Tenant[]             @relation("TenantOwner")
+
+  /// Platform-admin trails — populated only for SUPER_ADMIN users, who are the
+  /// only ones with a route to write these.
+  authoredTenantNotes  TenantNote[]             @relation("TenantNoteAuthor")
+  tenantStatusChanges  TenantStatusHistory[]    @relation("TenantStatusChangedBy")
+  tenantImpersonations TenantImpersonationLog[] @relation("TenantImpersonationAdmin")
 
   @@map("users")
 }
@@ -252,29 +270,115 @@ model Tenant {
   orderMessageTemplate String @default("") @map("order_message_template") @db.Text
   itemLineTemplate     String @default("{sku} : {quantity} x {product_name} - {variant_name} + {item_tax} = {item_total}") @map("item_line_template")
 
-  socialLinks Json @default("{}") @map("social_links")
-  settings    Json @default("{}")
+  socialLinks   Json @default("{}") @map("social_links")
+  settings      Json @default("{}")
+  /// Platform-admin-only bag (internal flags, support context) — distinct from
+  /// `settings` above, which the store owner reads/writes themselves.
+  adminMetadata Json @default("{}") @map("admin_metadata")
 
-  isActive  Boolean  @default(true) @map("is_active")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  /// Source of truth for the admin lifecycle (see TenantStatus). `isActive`
+  /// stays in sync with it (true only when ACTIVE) — kept as a plain column,
+  /// not derived at query time, so it stays usable in the same `where`
+  /// filters as today; TenantsAdminService.changeStatus is the only writer
+  /// of `status` and updates both fields in the same call.
+  status   TenantStatus @default(ACTIVE)
+  isActive Boolean      @default(true) @map("is_active")
 
-  owner           User                   @relation("TenantOwner", fields: [ownerId], references: [id])
-  members         TenantMember[]
-  customers       Customer[]
-  categories      ProductCategory[]
-  taxes           ProductTax[]
-  products        Product[]
-  locations       Location[]
-  shippings       Shipping[]
-  coupons         Coupon[]
-  orders          Order[]
-  paymentSettings TenantPaymentSetting[]
-  subscriptions   Subscription[]
-  emailTemplates  EmailTemplate[]
-  visits          Visit[]
+  /// Per-tenant override of the platform's default take-rate. Null means
+  /// "use the platform default" (not yet configurable here — see Módulo
+  /// Financiero); this only overrides it for one specific tenant.
+  commissionRate Decimal? @map("commission_rate") @db.Decimal(5, 2)
+
+  /// Manually granted overrides of the tenant's plan limits (e.g. a one-off
+  /// exception for maxProducts/maxStores). Unset keys fall back to the
+  /// active Subscription's Plan as usual — this never replaces Plan/Subscription,
+  /// it only patches specific values for one tenant.
+  limitsOverride Json? @map("limits_override")
+
+  deletedAt DateTime? @map("deleted_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  owner             User                     @relation("TenantOwner", fields: [ownerId], references: [id])
+  members           TenantMember[]
+  customers         Customer[]
+  categories        ProductCategory[]
+  taxes             ProductTax[]
+  products          Product[]
+  locations         Location[]
+  shippings         Shipping[]
+  coupons           Coupon[]
+  orders            Order[]
+  paymentSettings   TenantPaymentSetting[]
+  subscriptions     Subscription[]
+  emailTemplates    EmailTemplate[]
+  visits            Visit[]
+  notes             TenantNote[]
+  statusHistory     TenantStatusHistory[]
+  impersonationLogs TenantImpersonationLog[]
 
   @@map("tenants")
+}
+
+/// Internal note left by a platform admin on a tenant — never shown to the
+/// store owner. Immutable log, not an editable field: notes are appended,
+/// not updated or deleted, so the trail can't be quietly rewritten.
+model TenantNote {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  authorId  String   @map("author_id") @db.Uuid
+  body      String   @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  author User   @relation("TenantNoteAuthor", fields: [authorId], references: [id])
+
+  @@index([tenantId])
+  @@map("tenant_notes")
+}
+
+/// One row per admin-driven status transition — the audit trail for
+/// suspend/activate/ban/etc. `reason` is mandatory at the service layer
+/// (ChangeTenantStatusDto), not just here, so it's always populated.
+model TenantStatusHistory {
+  id          String       @id @default(uuid()) @db.Uuid
+  tenantId    String       @map("tenant_id") @db.Uuid
+  fromStatus  TenantStatus @map("from_status")
+  toStatus    TenantStatus @map("to_status")
+  reason      String       @db.Text
+  changedById String       @map("changed_by_id") @db.Uuid
+  ipAddress   String?      @map("ip_address")
+  userAgent   String?      @map("user_agent")
+  createdAt   DateTime     @default(now()) @map("created_at")
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  changedBy User   @relation("TenantStatusChangedBy", fields: [changedById], references: [id])
+
+  @@index([tenantId])
+  @@map("tenant_status_history")
+}
+
+/// One row per impersonation session a SUPER_ADMIN starts on a tenant.
+/// `endedAt` is set on logout or once `expiresAt` passes (checked, not
+/// enforced here — the short-lived impersonation JWT is what actually stops
+/// access; this row is the trail of who did it, when, and from where).
+model TenantImpersonationLog {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  adminId   String    @map("admin_id") @db.Uuid
+  reason    String?   @db.Text
+  ipAddress String?   @map("ip_address")
+  userAgent String?   @map("user_agent")
+  startedAt DateTime  @default(now()) @map("started_at")
+  expiresAt DateTime  @map("expires_at")
+  endedAt   DateTime? @map("ended_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  admin  User   @relation("TenantImpersonationAdmin", fields: [adminId], references: [id])
+
+  @@index([tenantId])
+  @@index([adminId])
+  @@map("tenant_impersonation_logs")
 }
 
 model TenantPaymentSetting {
@@ -550,7 +654,7 @@ model Order {
   // Same anonymous id as Visit.sessionId, deliberately not an FK (Visit rows
   // are purged after 60 days) — lets the dashboard join "this session
   // browsed" to "this session bought" for a real conversion rate.
-  sessionId String? @map("session_id") @db.Uuid
+  sessionId     String? @map("session_id") @db.Uuid
 
   status            OrderStatus       @default(PENDING)
   paymentStatus     PaymentStatus     @default(PENDING) @map("payment_status")

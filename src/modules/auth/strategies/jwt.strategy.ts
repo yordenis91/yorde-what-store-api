@@ -10,6 +10,8 @@ export interface JwtPayload {
   globalRole: string;
   tenantId?: string;
   tenantRole?: string;
+  /** Set only on a short-lived impersonation token (see PlatformTenantsService.impersonate) — the SUPER_ADMIN's own user id. */
+  impersonatedBy?: string;
 }
 
 @Injectable()
@@ -45,6 +47,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       globalRole: user.globalRole,
       tenantId: payload.tenantId,
       tenantRole: payload.tenantRole,
+      impersonatedBy: payload.impersonatedBy,
     };
   }
 }

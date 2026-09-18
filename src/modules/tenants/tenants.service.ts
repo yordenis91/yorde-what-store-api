@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { decryptSecret, encryptSecret } from '../../common/utils/crypto.util';
+import { maskSmtpPassword } from '../../common/utils/mask-tenant-secrets.util';
 import { CreateTenantDto, UpdateTenantDto, UpsertPaymentSettingDto } from './dto';
 
 @Injectable()
@@ -147,12 +148,4 @@ export class TenantsService {
     if (!encrypted) throw new BadRequestException('Payment credentials corrupted');
     return JSON.parse(decryptSecret(encrypted, secret));
   }
-}
-
-/** Replaces the encrypted smtpPassword blob with a boolean flag — it's never returned as-is over the API. */
-function maskSmtpPassword<T extends { smtpPassword?: string | null }>(
-  tenant: T,
-): Omit<T, 'smtpPassword'> & { smtpPasswordSet: boolean } {
-  const { smtpPassword, ...rest } = tenant;
-  return { ...rest, smtpPasswordSet: !!smtpPassword };
 }

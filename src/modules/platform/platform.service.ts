@@ -1,6 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { PaginatedResult, PaginationDto } from '../../common/dto/pagination.dto';
 
 @Injectable()
 export class PlatformService {
@@ -77,49 +76,5 @@ export class PlatformService {
       activeSubscriptions: activeSubscriptions.length,
       planBreakdown: Array.from(byPlan.values()).sort((a, b) => b.mrr - a.mrr),
     };
-  }
-
-  async listTenants(query: PaginationDto): Promise<PaginatedResult<any>> {
-    const where = query.search
-      ? {
-          OR: [
-            { name: { contains: query.search, mode: 'insensitive' as const } },
-            { slug: { contains: query.search, mode: 'insensitive' as const } },
-            { owner: { email: { contains: query.search, mode: 'insensitive' as const } } },
-          ],
-        }
-      : {};
-
-    return this.prisma.withRlsBypass(async (tx) => {
-      const [items, total] = await Promise.all([
-        tx.tenant.findMany({
-          where,
-          skip: query.skip,
-          take: query.limit,
-          orderBy: { createdAt: 'desc' },
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-            isActive: true,
-            createdAt: true,
-            owner: { select: { email: true, name: true } },
-            subscriptions: { orderBy: { createdAt: 'desc' }, take: 1, include: { plan: true } },
-            _count: { select: { products: true, orders: true } },
-          },
-        }),
-        tx.tenant.count({ where }),
-      ]);
-      return {
-        items,
-        meta: { page: query.page, limit: query.limit, total, totalPages: Math.ceil(total / query.limit) },
-      };
-    });
-  }
-
-  async updateTenantStatus(id: string, isActive: boolean) {
-    const tenant = await this.prisma.tenant.findUnique({ where: { id } });
-    if (!tenant) throw new NotFoundException('Tenant not found');
-    return this.prisma.tenant.update({ where: { id }, data: { isActive } });
   }
 }
