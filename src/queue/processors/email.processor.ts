@@ -7,6 +7,7 @@ import { EMAIL_QUEUE } from '../queue.constants';
 import { EmailTemplatesService } from '../../modules/email-templates/email-templates.service';
 import { renderTemplate } from '../../modules/email-templates/template-renderer';
 import { EmailTemplateKey } from '../../modules/email-templates/default-templates';
+import { TenantsService } from '../../modules/tenants/tenants.service';
 
 export interface EmailJobData {
   templateKey: EmailTemplateKey;
@@ -23,6 +24,7 @@ export class EmailProcessor extends WorkerHost {
 
   constructor(
     private readonly emailTemplates: EmailTemplatesService,
+    private readonly tenants: TenantsService,
     private readonly config: ConfigService,
   ) {
     super();
@@ -39,7 +41,8 @@ export class EmailProcessor extends WorkerHost {
     const subject = renderTemplate(template.subject, variables);
     const body = renderTemplate(template.body, variables);
 
-    const host = this.config.get<string>('mail.host');
+    const tenantSmtp = await this.tenants.getDecryptedSmtpConfig(tenantId);
+    const host = tenantSmtp?.host ?? this.config.get<string>('mail.host');
     if (!host) {
       // No SMTP configured (typical in dev) — logging keeps the queue fully
       // functional end to end without requiring real mail infrastructure.
@@ -47,13 +50,13 @@ export class EmailProcessor extends WorkerHost {
       return;
     }
 
-    await this.getTransporter(host).sendMail({
-      from: this.config.get<string>('mail.from'),
-      to,
-      subject,
-      text: body,
-    });
-    this.logger.log(`Sent "${subject}" to ${to}`);
+    const transporter = tenantSmtp
+      ? buildTransporter(tenantSmtp.host, tenantSmtp.port, tenantSmtp.user, tenantSmtp.password)
+      : this.getPlatformTransporter(host);
+    const from = tenantSmtp?.from || this.config.get<string>('mail.from');
+
+    await transporter.sendMail({ from, to, subject, text: body });
+    this.logger.log(`Sent "${subject}" to ${to}${tenantSmtp ? ' via tenant SMTP' : ''}`);
   }
 
   /**
@@ -72,21 +75,31 @@ export class EmailProcessor extends WorkerHost {
     );
   }
 
-  private getTransporter(host: string): nodemailer.Transporter {
+  /** Platform default — cached, since its credentials come from static env config. */
+  private getPlatformTransporter(host: string): nodemailer.Transporter {
     if (!this.transporter) {
       const user = this.config.get<string>('mail.user');
       const password = this.config.get<string>('mail.password');
-      const port = this.config.get<number>('mail.port');
-      this.transporter = nodemailer.createTransport({
-        host,
-        port,
-        // 465 is implicit TLS from the first byte; every other port (587, 25)
-        // starts plaintext and upgrades via STARTTLS, which nodemailer already
-        // negotiates on its own when secure is false.
-        secure: port === 465,
-        auth: user ? { user, pass: password } : undefined,
-      });
+      const port = this.config.get<number>('mail.port') ?? 587;
+      this.transporter = buildTransporter(host, port, user, password);
     }
     return this.transporter;
   }
+}
+
+/**
+ * Not cached: a tenant's SMTP settings can change between sends, and this
+ * (unlike a pooled transporter) opens no connection until `sendMail` is
+ * called, so building one fresh per send costs nothing.
+ */
+function buildTransporter(host: string, port: number, user?: string, password?: string): nodemailer.Transporter {
+  return nodemailer.createTransport({
+    host,
+    port,
+    // 465 is implicit TLS from the first byte; every other port (587, 25)
+    // starts plaintext and upgrades via STARTTLS, which nodemailer already
+    // negotiates on its own when secure is false.
+    secure: port === 465,
+    auth: user ? { user, pass: password } : undefined,
+  });
 }

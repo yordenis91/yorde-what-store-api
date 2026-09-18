@@ -236,6 +236,17 @@ model Tenant {
   telegramBotToken String? @map("telegram_bot_token")
   telegramChatId   String? @map("telegram_chat_id")
 
+  /// Per-tenant SMTP override — falls back to the platform's own SMTP (env
+  /// vars, see mailConfig) when disabled or unset. smtpPassword is encrypted
+  /// at the service layer (see crypto.util.ts) before persisting; never
+  /// returned as-is over the API.
+  smtpEnabled  Boolean @default(false) @map("smtp_enabled")
+  smtpHost     String? @map("smtp_host")
+  smtpPort     Int?    @map("smtp_port")
+  smtpUser     String? @map("smtp_user")
+  smtpPassword String? @map("smtp_password")
+  smtpFrom     String? @map("smtp_from")
+
   /// Templated order message with placeholders: {store_name} {order_no} {item_variable}
   /// {sub_total} {discount_amount} {shipping_amount} {item_tax} {item_total}
   orderMessageTemplate String @default("") @map("order_message_template") @db.Text

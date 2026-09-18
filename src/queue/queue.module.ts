@@ -13,10 +13,12 @@ import { InventorySyncProcessor } from './processors/inventory-sync.processor';
 import { OrderNotificationProcessor } from './processors/order-notification.processor';
 import { VisitsCleanupProcessor } from './processors/visits-cleanup.processor';
 import { EmailTemplatesModule } from '../modules/email-templates/email-templates.module';
+import { TenantsModule } from '../modules/tenants/tenants.module';
 
 @Module({
   imports: [
     EmailTemplatesModule,
+    TenantsModule,
     BullModule.registerQueue(
       { name: EMAIL_QUEUE },
       { name: INVOICE_PDF_QUEUE },

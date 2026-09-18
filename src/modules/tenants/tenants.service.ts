@@ -22,13 +22,13 @@ export class TenantsService {
       where: { userId, isActive: true },
       include: { tenant: true },
     });
-    return memberships.map((m) => ({ ...m.tenant, myRole: m.role }));
+    return memberships.map((m) => ({ ...maskSmtpPassword(m.tenant), myRole: m.role }));
   }
 
   async findCurrent(tenantId: string) {
     const tenant = await this.prisma.db.tenant.findUnique({ where: { id: tenantId } });
     if (!tenant) throw new NotFoundException('Tenant not found');
-    return tenant;
+    return maskSmtpPassword(tenant);
   }
 
   async findPublicBySlug(slug: string) {
@@ -87,7 +87,35 @@ export class TenantsService {
   }
 
   async update(tenantId: string, dto: UpdateTenantDto) {
-    return this.prisma.db.tenant.update({ where: { id: tenantId }, data: dto as any });
+    const { smtpPassword, ...rest } = dto;
+    const data: Record<string, unknown> = { ...rest };
+    // Omitted entirely: leave the stored password untouched (so the merchant
+    // isn't forced to retype it on every settings save). An explicit empty
+    // string clears it.
+    if (smtpPassword !== undefined) {
+      const secret = this.config.get<string>('security.encryptionKey')!;
+      data.smtpPassword = smtpPassword === '' ? null : encryptSecret(smtpPassword, secret);
+    }
+    const tenant = await this.prisma.db.tenant.update({ where: { id: tenantId }, data: data as any });
+    return maskSmtpPassword(tenant);
+  }
+
+  /** Internal use only (email queue) — the decrypted password never leaves this method. */
+  async getDecryptedSmtpConfig(tenantId: string) {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { smtpEnabled: true, smtpHost: true, smtpPort: true, smtpUser: true, smtpPassword: true, smtpFrom: true },
+    });
+    if (!tenant?.smtpEnabled || !tenant.smtpHost) return null;
+
+    const secret = this.config.get<string>('security.encryptionKey')!;
+    return {
+      host: tenant.smtpHost,
+      port: tenant.smtpPort ?? 587,
+      user: tenant.smtpUser ?? undefined,
+      password: tenant.smtpPassword ? decryptSecret(tenant.smtpPassword, secret) : undefined,
+      from: tenant.smtpFrom ?? undefined,
+    };
   }
 
   async upsertPaymentSetting(tenantId: string, dto: UpsertPaymentSettingDto) {
@@ -119,4 +147,12 @@ export class TenantsService {
     if (!encrypted) throw new BadRequestException('Payment credentials corrupted');
     return JSON.parse(decryptSecret(encrypted, secret));
   }
+}
+
+/** Replaces the encrypted smtpPassword blob with a boolean flag — it's never returned as-is over the API. */
+function maskSmtpPassword<T extends { smtpPassword?: string | null }>(
+  tenant: T,
+): Omit<T, 'smtpPassword'> & { smtpPasswordSet: boolean } {
+  const { smtpPassword, ...rest } = tenant;
+  return { ...rest, smtpPasswordSet: !!smtpPassword };
 }

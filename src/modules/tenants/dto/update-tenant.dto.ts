@@ -1,4 +1,4 @@
-import { IsBoolean, IsObject, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsInt, IsObject, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 export class UpdateTenantDto {
   @IsOptional()
@@ -69,6 +69,33 @@ export class UpdateTenantDto {
   @IsOptional()
   @IsString()
   telegramChatId?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  smtpEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  smtpHost?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(65535)
+  smtpPort?: number;
+
+  @IsOptional()
+  @IsString()
+  smtpUser?: string;
+
+  /** Plaintext in transit only — encrypted at the service layer before persisting. Omit to leave the stored password unchanged. */
+  @IsOptional()
+  @IsString()
+  smtpPassword?: string;
+
+  @IsOptional()
+  @IsString()
+  smtpFrom?: string;
 
   @IsOptional()
   @IsString()

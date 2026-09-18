@@ -46,6 +46,7 @@ export const mercadoPagoConfig = registerAs('mercadoPago', () => ({
   webhookSecret: process.env.MERCADOPAGO_WEBHOOK_SECRET,
 }));
 
+/** Platform-wide fallback SMTP, used when a tenant hasn't set up their own (see Tenant.smtpEnabled, EmailProcessor). */
 export const mailConfig = registerAs('mail', () => ({
   host: process.env.SMTP_HOST,
   port: parseInt(process.env.SMTP_PORT ?? '587', 10),
