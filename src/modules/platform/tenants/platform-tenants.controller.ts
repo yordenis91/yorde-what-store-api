@@ -1,9 +1,11 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseInterceptors } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { CurrentUser, AuthenticatedUser, Roles } from '../../../common/decorators';
 import { PaginationDto } from '../../../common/dto/pagination.dto';
+import { Audit } from '../../audit/decorators/audit.decorator';
+import { AuditInterceptor } from '../../audit/interceptors/audit.interceptor';
 import { PlatformTenantsService } from './platform-tenants.service';
 import {
   ActivateTenantDto,
@@ -17,6 +19,7 @@ import {
 
 @ApiTags('platform-tenants')
 @Roles('SUPER_ADMIN')
+@UseInterceptors(AuditInterceptor)
 @Controller('platform/tenants')
 export class PlatformTenantsController {
   constructor(private readonly tenantsService: PlatformTenantsService) {}
@@ -34,6 +37,7 @@ export class PlatformTenantsController {
   }
 
   @ApiOperation({ summary: 'Admin-initiated tenant creation — creates the owner account and the store together' })
+  @Audit({ action: 'tenant.create', entityType: 'Tenant' })
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post()
   create(@Body() dto: CreateTenantAdminDto) {
@@ -43,18 +47,21 @@ export class PlatformTenantsController {
   @ApiOperation({
     summary: "Update a tenant's admin-managed fields (name, commission rate, limit overrides, internal metadata)",
   })
+  @Audit({ action: 'tenant.update', entityType: 'Tenant' })
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateTenantAdminDto) {
     return this.tenantsService.update(id, dto);
   }
 
   @ApiOperation({ summary: 'Soft-delete a tenant (reversible; storefront becomes unreachable immediately)' })
+  @Audit({ action: 'tenant.delete', entityType: 'Tenant' })
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.tenantsService.softDelete(id);
   }
 
   @ApiOperation({ summary: 'Suspend a tenant (requires a reason; recorded in its status history)' })
+  @Audit({ action: 'tenant.suspend', entityType: 'Tenant' })
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Post(':id/suspend')
   suspend(
@@ -67,6 +74,7 @@ export class PlatformTenantsController {
   }
 
   @ApiOperation({ summary: 'Reactivate a suspended/banned tenant (requires a reason; recorded in its status history)' })
+  @Audit({ action: 'tenant.activate', entityType: 'Tenant' })
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Post(':id/activate')
   activate(
@@ -79,6 +87,7 @@ export class PlatformTenantsController {
   }
 
   @ApiOperation({ summary: "Issue a 30-minute token that authenticates as the tenant's owner, for support access" })
+  @Audit({ action: 'tenant.impersonate', entityType: 'Tenant' })
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post(':id/impersonate')
   impersonate(
@@ -109,6 +118,7 @@ export class PlatformTenantsController {
   }
 
   @ApiOperation({ summary: 'Add an internal admin note to a tenant' })
+  @Audit({ action: 'tenant.note.create', entityType: 'Tenant' })
   @Post(':id/notes')
   addNote(@Param('id') id: string, @Body() dto: CreateTenantNoteDto, @CurrentUser() actor: AuthenticatedUser) {
     return this.tenantsService.addNote(id, dto, actor);

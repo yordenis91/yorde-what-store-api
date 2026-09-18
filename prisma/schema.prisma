@@ -381,6 +381,34 @@ model TenantImpersonationLog {
   @@map("tenant_impersonation_logs")
 }
 
+/// Generic, cross-cutting "who did what" trail — written by AuditInterceptor
+/// (see common/audit) whenever a controller method carries @Audit(). Actor
+/// fields are denormalized snapshots (not a live join to User) so a log entry
+/// keeps meaning even if the actor is later deleted or renamed. Complements,
+/// rather than replaces, TenantStatusHistory/TenantImpersonationLog above —
+/// those carry richer, typed detail for their own UI tabs; this is the
+/// platform-wide feed across every module's sensitive actions.
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  actorId    String?  @map("actor_id") @db.Uuid
+  actorEmail String?  @map("actor_email")
+  actorRole  String?  @map("actor_role")
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String?  @map("entity_id")
+  tenantId   String?  @map("tenant_id") @db.Uuid
+  metadata   Json     @default("{}")
+  ipAddress  String?  @map("ip_address")
+  userAgent  String?  @map("user_agent")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([actorId])
+  @@index([tenantId])
+  @@index([action])
+  @@map("audit_logs")
+}
+
 model TenantPaymentSetting {
   id          String          @id @default(uuid()) @db.Uuid
   tenantId    String          @map("tenant_id") @db.Uuid
