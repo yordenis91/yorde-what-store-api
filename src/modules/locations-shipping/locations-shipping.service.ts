@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateLocationDto, UpdateLocationDto, CreateShippingDto, UpdateShippingDto } from './dto';
 
@@ -19,8 +19,25 @@ export class LocationsShippingService {
     return this.prisma.db.location.update({ where: { id }, data: dto });
   }
 
+  /**
+   * Blocked, not cascaded or silently unlinked: `Shipping.locationId` is
+   * `ON DELETE SET NULL` at the DB level, which would otherwise let a
+   * location-scoped shipping method quietly turn into an "any location" one
+   * — still active, still offered at checkout — the moment its location is
+   * deleted, with nothing telling the merchant that happened. Requiring them
+   * to reassign or delete those shipping methods first keeps the change
+   * explicit instead of a surprise a customer discovers before they do.
+   */
   async removeLocation(tenantId: string, id: string) {
     await this.ensureLocation(tenantId, id);
+
+    const shippingCount = await this.prisma.db.shipping.count({ where: { tenantId, locationId: id } });
+    if (shippingCount > 0) {
+      throw new ConflictException(
+        `This location has ${shippingCount} shipping method(s) associated. Reassign or delete them before deleting the location.`,
+      );
+    }
+
     await this.prisma.db.location.delete({ where: { id } });
     return { deleted: true };
   }
