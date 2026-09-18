@@ -90,3 +90,14 @@ export const backupConfig = registerAs('backup', () => ({
   s3SecretAccessKey: process.env.BACKUP_S3_SECRET_ACCESS_KEY,
   s3Prefix: process.env.BACKUP_S3_PREFIX ?? 'postgres',
 }));
+
+/**
+ * Stopgap until Módulo 8 (Configuración Global de Plataforma) exists: the
+ * take-rate used for the platform dashboard's commission estimate on any
+ * tenant that hasn't been given its own override (Tenant.commissionRate).
+ * Env-only for now, same as every other cross-cutting constant here — once
+ * there's a real settings table/UI, this becomes its seeded default instead.
+ */
+export const platformConfig = registerAs('platform', () => ({
+  defaultCommissionRate: parseFloat(process.env.PLATFORM_DEFAULT_COMMISSION_RATE ?? '5'),
+}));

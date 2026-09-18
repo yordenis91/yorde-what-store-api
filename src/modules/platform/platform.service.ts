@@ -1,12 +1,21 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
+import { DashboardRange } from '../dashboard/dto/dashboard-query.dto';
+import { buildDayBuckets, dayKey, rangeDays, rangeStart } from '../../common/utils/date-range-buckets.util';
 
 @Injectable()
 export class PlatformService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+  ) {}
 
-  async getSummary() {
-    const [totalTenants, activeTenants, totalUsers, recentTenants, orderStats, billing] = await Promise.all([
+  async getSummary(range: DashboardRange = '7d') {
+    const days = rangeDays(range);
+    const from = rangeStart(range);
+
+    const [totalTenants, activeTenants, totalUsers, recentTenants, periodStats, billing] = await Promise.all([
       this.prisma.tenant.count(),
       this.prisma.tenant.count({ where: { isActive: true } }),
       this.prisma.user.count(),
@@ -22,17 +31,94 @@ export class PlatformService {
           owner: { select: { email: true } },
         },
       }),
-      this.prisma.withRlsBypass(async (tx) => {
-        const [totalOrders, paidOrders] = await Promise.all([
-          tx.order.count(),
-          tx.order.findMany({ where: { paymentStatus: 'PAID' }, select: { grandTotal: true } }),
-        ]);
-        return { totalOrders, totalRevenue: paidOrders.reduce((sum, o) => sum + Number(o.grandTotal), 0) };
-      }),
+      this.getPeriodStats(from, days),
       this.getBillingSummary(),
     ]);
 
-    return { totalTenants, activeTenants, totalUsers, recentTenants, ...orderStats, ...billing };
+    return { totalTenants, activeTenants, totalUsers, recentTenants, range, ...periodStats, ...billing };
+  }
+
+  /**
+   * Everything that needs cross-tenant `order`/`orderItem` data (RLS-protected)
+   * lives in one withRlsBypass pass, same pattern as before this KPI set grew:
+   * lifetime totals (unchanged), plus period GMV, its day-bucketed time series,
+   * the top tenants behind it, order volume in the period (any status, mirroring
+   * how `totalOrders` below counts all statuses too), and an estimated platform
+   * commission total. Commission math only makes sense on money actually
+   * collected, so it — like the GMV figures — is PAID-orders-only, even though
+   * `periodOrders`'s own count isn't (that one tracks order *activity*, not money).
+   */
+  private async getPeriodStats(from: Date, days: number) {
+    const { totalOrders, totalRevenue, periodOrders, periodPaidOrders } = await this.prisma.withRlsBypass(
+      async (tx) => {
+        const [totalOrders, allPaidOrders, periodOrders, periodPaidOrders] = await Promise.all([
+          tx.order.count(),
+          tx.order.findMany({ where: { paymentStatus: 'PAID' }, select: { grandTotal: true } }),
+          tx.order.count({ where: { createdAt: { gte: from } } }),
+          tx.order.findMany({
+            where: { paymentStatus: 'PAID', createdAt: { gte: from } },
+            select: { tenantId: true, grandTotal: true, createdAt: true },
+          }),
+        ]);
+        return {
+          totalOrders,
+          totalRevenue: allPaidOrders.reduce((sum, o) => sum + Number(o.grandTotal), 0),
+          periodOrders,
+          periodPaidOrders,
+        };
+      },
+    );
+
+    const gmvBuckets = buildDayBuckets(from, days, () => ({ orders: 0, gmv: 0 }));
+    const tenantTotals = new Map<string, number>();
+    for (const order of periodPaidOrders) {
+      const bucket = gmvBuckets.get(dayKey(order.createdAt));
+      if (bucket) {
+        bucket.orders += 1;
+        bucket.gmv += Number(order.grandTotal);
+      }
+      tenantTotals.set(order.tenantId, (tenantTotals.get(order.tenantId) ?? 0) + Number(order.grandTotal));
+    }
+    const gmvOverTime = Array.from(gmvBuckets.entries()).map(([date, v]) => ({ date, ...v }));
+    const periodRevenue = periodPaidOrders.reduce((sum, o) => sum + Number(o.grandTotal), 0);
+
+    const involvedTenantIds = Array.from(tenantTotals.keys());
+    const involvedTenants = involvedTenantIds.length
+      ? await this.prisma.tenant.findMany({
+          where: { id: { in: involvedTenantIds } },
+          select: { id: true, name: true, slug: true, commissionRate: true },
+        })
+      : [];
+    const tenantById = new Map(involvedTenants.map((t) => [t.id, t]));
+
+    const topTenantsByRevenue = Array.from(tenantTotals.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([tenantId, revenue]) => ({
+        tenantId,
+        name: tenantById.get(tenantId)?.name ?? 'Unknown',
+        slug: tenantById.get(tenantId)?.slug ?? '',
+        revenue,
+      }));
+
+    const defaultCommissionRate = this.config.get<number>('platform.defaultCommissionRate') ?? 5;
+    let commissionsTotal = 0;
+    for (const order of periodPaidOrders) {
+      const override = tenantById.get(order.tenantId)?.commissionRate;
+      const rate = override !== undefined && override !== null ? Number(override) : defaultCommissionRate;
+      commissionsTotal += Number(order.grandTotal) * (rate / 100);
+    }
+
+    return {
+      totalOrders,
+      totalRevenue,
+      periodOrders,
+      periodRevenue,
+      gmvOverTime,
+      topTenantsByRevenue,
+      commissionsTotal,
+      defaultCommissionRate,
+    };
   }
 
   /**

@@ -1,7 +1,8 @@
 import { IsIn, IsOptional } from 'class-validator';
+import { DASHBOARD_RANGES, DashboardRange } from '../../../common/utils/date-range-buckets.util';
 
-export const DASHBOARD_RANGES = ['7d', '30d', '90d'] as const;
-export type DashboardRange = (typeof DASHBOARD_RANGES)[number];
+export { DASHBOARD_RANGES };
+export type { DashboardRange };
 
 export class DashboardQueryDto {
   @IsOptional()

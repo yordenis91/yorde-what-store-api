@@ -19,6 +19,7 @@ import {
   totpConfig,
   securityConfig,
   backupConfig,
+  platformConfig,
 } from './config';
 import { winstonLoggerOptions } from './logger/winston.config';
 
@@ -68,6 +69,7 @@ import { AppService } from './app.service';
         totpConfig,
         securityConfig,
         backupConfig,
+        platformConfig,
       ],
     }),
     ScheduleModule.forRoot(),

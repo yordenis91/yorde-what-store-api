@@ -1,36 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { DashboardRange } from './dto/dashboard-query.dto';
-
-const RANGE_DAYS: Record<DashboardRange, number> = { '7d': 7, '30d': 30, '90d': 90 };
-
-function rangeStart(range: DashboardRange): Date {
-  const start = new Date();
-  start.setDate(start.getDate() - (RANGE_DAYS[range] - 1));
-  start.setHours(0, 0, 0, 0);
-  return start;
-}
-
-function dayKey(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
-function buildDayBuckets<T>(start: Date, days: number, empty: () => T): Map<string, T> {
-  const buckets = new Map<string, T>();
-  for (let i = 0; i < days; i++) {
-    const d = new Date(start);
-    d.setDate(d.getDate() + i);
-    buckets.set(dayKey(d), empty());
-  }
-  return buckets;
-}
+import { buildDayBuckets, dayKey, rangeDays, rangeStart } from '../../common/utils/date-range-buckets.util';
 
 @Injectable()
 export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getSummary(tenantId: string, range: DashboardRange = '7d') {
-    const days = RANGE_DAYS[range];
+    const days = rangeDays(range);
     const from = rangeStart(range);
 
     const [
