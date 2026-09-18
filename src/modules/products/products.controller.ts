@@ -1,7 +1,9 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { CurrentTenantId, Public, Roles } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
+import { Audit } from '../audit/decorators/audit.decorator';
+import { AuditInterceptor } from '../audit/interceptors/audit.interceptor';
 import { ProductsService } from './products.service';
 import {
   CreateProductDto,
@@ -48,10 +50,12 @@ export class StorefrontCategoriesController {
 @ApiTags('products')
 @UseGuards(TenantRequiredGuard)
 @Roles('OWNER', 'STAFF')
+@UseInterceptors(AuditInterceptor)
 @Controller('products')
 export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
+  @Audit({ action: 'product.create', entityType: 'Product' })
   @Post()
   create(@CurrentTenantId() tenantId: string, @Body() dto: CreateProductDto) {
     return this.productsService.create(tenantId, dto);
@@ -67,11 +71,13 @@ export class ProductsController {
     return this.productsService.listCategories(tenantId);
   }
 
+  @Audit({ action: 'category.create', entityType: 'ProductCategory' })
   @Post('categories')
   createCategory(@CurrentTenantId() tenantId: string, @Body() dto: CreateCategoryDto) {
     return this.productsService.createCategory(tenantId, dto);
   }
 
+  @Audit({ action: 'category.delete', entityType: 'ProductCategory' })
   @Delete('categories/:id')
   removeCategory(@CurrentTenantId() tenantId: string, @Param('id') id: string) {
     return this.productsService.removeCategory(tenantId, id);
@@ -82,6 +88,7 @@ export class ProductsController {
     return this.productsService.listCategoryTemplates();
   }
 
+  @Audit({ action: 'category.create_from_template', entityType: 'ProductCategory' })
   @Post('categories/from-template')
   createCategoryFromTemplate(@CurrentTenantId() tenantId: string, @Body() dto: CreateCategoryFromTemplateDto) {
     return this.productsService.createCategoryFromTemplate(tenantId, dto.templateId);
@@ -92,11 +99,13 @@ export class ProductsController {
     return this.productsService.listTaxes(tenantId);
   }
 
+  @Audit({ action: 'tax.create', entityType: 'ProductTax' })
   @Post('taxes')
   createTax(@CurrentTenantId() tenantId: string, @Body() dto: CreateTaxDto) {
     return this.productsService.createTax(tenantId, dto);
   }
 
+  @Audit({ action: 'tax.delete', entityType: 'ProductTax' })
   @Delete('taxes/:id')
   removeTax(@CurrentTenantId() tenantId: string, @Param('id') id: string) {
     return this.productsService.removeTax(tenantId, id);
@@ -107,11 +116,13 @@ export class ProductsController {
     return this.productsService.findOne(tenantId, id);
   }
 
+  @Audit({ action: 'product.update', entityType: 'Product' })
   @Patch(':id')
   update(@CurrentTenantId() tenantId: string, @Param('id') id: string, @Body() dto: UpdateProductDto) {
     return this.productsService.update(tenantId, id, dto);
   }
 
+  @Audit({ action: 'product.delete', entityType: 'Product' })
   @Delete(':id')
   remove(@CurrentTenantId() tenantId: string, @Param('id') id: string) {
     return this.productsService.remove(tenantId, id);

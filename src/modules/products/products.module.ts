@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { CategoryTemplatesModule } from '../category-templates/category-templates.module';
 import { PlansModule } from '../plans/plans.module';
+import { AuditModule } from '../audit/audit.module';
 import {
   ProductsController,
   StorefrontProductsController,
@@ -9,7 +10,7 @@ import {
 import { ProductsService } from './products.service';
 
 @Module({
-  imports: [CategoryTemplatesModule, PlansModule],
+  imports: [CategoryTemplatesModule, PlansModule, AuditModule],
   controllers: [ProductsController, StorefrontProductsController, StorefrontCategoriesController],
   providers: [ProductsService],
   exports: [ProductsService],

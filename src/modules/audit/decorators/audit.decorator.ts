@@ -7,6 +7,8 @@ export interface AuditOptions {
   action: string;
   /** e.g. "Tenant" — paired with entityId to say what the action targeted. */
   entityType: string;
+  /** Route param holding the entity id, when it isn't `:id` (e.g. "key" for email templates). Defaults to "id". */
+  paramName?: string;
 }
 
 /**

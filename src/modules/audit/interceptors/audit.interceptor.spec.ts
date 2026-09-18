@@ -94,6 +94,28 @@ describe('AuditInterceptor', () => {
     });
   });
 
+  it('redacts credential fields nested inside the request body (e.g. payment provider credentials)', (done) => {
+    const { interceptor, context, next, record } = buildInterceptor({
+      auditOptions: { action: 'payment_settings.upsert', entityType: 'TenantPaymentSetting' },
+      request: {
+        body: {
+          provider: 'STRIPE',
+          isEnabled: true,
+          credentials: { secretKey: 'sk_live_abc', publicKey: 'pk_live_abc' },
+        },
+      },
+    });
+
+    interceptor.intercept(context, next).subscribe(() => {
+      expect(record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: { request: { provider: 'STRIPE', isEnabled: true, credentials: '[redacted]' } },
+        }),
+      );
+      done();
+    });
+  });
+
   it('never lets an audit-log write failure propagate to the response', (done) => {
     const { interceptor, context, next, record } = buildInterceptor({
       auditOptions: { action: 'tenant.suspend', entityType: 'Tenant' },

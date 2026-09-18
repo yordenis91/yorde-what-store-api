@@ -1,12 +1,15 @@
-import { Body, Controller, Get, Param, Patch, Post, Put } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Put, UseInterceptors } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Public, Roles, CurrentUser, CurrentTenantId, AuthenticatedUser } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
 import { UseGuards } from '@nestjs/common';
+import { Audit } from '../audit/decorators/audit.decorator';
+import { AuditInterceptor } from '../audit/interceptors/audit.interceptor';
 import { TenantsService } from './tenants.service';
 import { CreateTenantDto, UpdateTenantDto, UpsertPaymentSettingDto } from './dto';
 
 @ApiTags('tenants')
+@UseInterceptors(AuditInterceptor)
 @Controller('tenants')
 export class TenantsController {
   constructor(private readonly tenantsService: TenantsService) {}
@@ -30,6 +33,7 @@ export class TenantsController {
 
   @UseGuards(TenantRequiredGuard)
   @Roles('OWNER')
+  @Audit({ action: 'tenant_settings.update', entityType: 'Tenant' })
   @Patch('current')
   update(@CurrentTenantId() tenantId: string, @Body() dto: UpdateTenantDto) {
     return this.tenantsService.update(tenantId, dto);
@@ -49,6 +53,7 @@ export class TenantsController {
 
   @UseGuards(TenantRequiredGuard)
   @Roles('OWNER')
+  @Audit({ action: 'payment_settings.upsert', entityType: 'TenantPaymentSetting' })
   @Put('current/payment-settings')
   upsertPaymentSetting(@CurrentTenantId() tenantId: string, @Body() dto: UpsertPaymentSettingDto) {
     return this.tenantsService.upsertPaymentSetting(tenantId, dto);

@@ -1,4 +1,17 @@
-import { Body, Controller, Get, MessageEvent, Param, Patch, Post, Query, Res, Sse, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  MessageEvent,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Res,
+  Sse,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { Observable, map } from 'rxjs';
@@ -6,6 +19,8 @@ import { CurrentTenantId, Public, Roles } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
 import { CurrentCustomerId } from '../customers/decorators/current-customer-id.decorator';
 import { OptionalCustomerAuthGuard } from '../customers/guards/optional-customer-auth.guard';
+import { Audit } from '../audit/decorators/audit.decorator';
+import { AuditInterceptor } from '../audit/interceptors/audit.interceptor';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto, UpdateOrderStatusDto, OrderQueryDto, QuoteOrderDto } from './dto';
 
@@ -32,6 +47,7 @@ export class StorefrontOrdersController {
 @ApiTags('orders')
 @UseGuards(TenantRequiredGuard)
 @Roles('OWNER', 'STAFF')
+@UseInterceptors(AuditInterceptor)
 @Controller('orders')
 export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
@@ -70,6 +86,7 @@ export class OrdersController {
     return this.ordersService.findOne(tenantId, id);
   }
 
+  @Audit({ action: 'order.status_update', entityType: 'Order' })
   @Patch(':id/status')
   updateStatus(@CurrentTenantId() tenantId: string, @Param('id') id: string, @Body() dto: UpdateOrderStatusDto) {
     return this.ordersService.updateStatus(tenantId, id, dto.status);

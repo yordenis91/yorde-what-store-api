@@ -1,10 +1,12 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { IsNumber, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CurrentTenantId, Public, Roles } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
 import { PaginationDto } from '../../common/dto/pagination.dto';
+import { Audit } from '../audit/decorators/audit.decorator';
+import { AuditInterceptor } from '../audit/interceptors/audit.interceptor';
 import { CouponsService } from './coupons.service';
 import { CreateCouponDto, UpdateCouponDto } from './dto';
 
@@ -31,10 +33,12 @@ export class StorefrontCouponsController {
 @ApiTags('coupons')
 @UseGuards(TenantRequiredGuard)
 @Roles('OWNER', 'STAFF')
+@UseInterceptors(AuditInterceptor)
 @Controller('coupons')
 export class CouponsController {
   constructor(private readonly couponsService: CouponsService) {}
 
+  @Audit({ action: 'coupon.create', entityType: 'Coupon' })
   @Post()
   create(@CurrentTenantId() tenantId: string, @Body() dto: CreateCouponDto) {
     return this.couponsService.create(tenantId, dto);
@@ -50,11 +54,13 @@ export class CouponsController {
     return this.couponsService.findOne(tenantId, id);
   }
 
+  @Audit({ action: 'coupon.update', entityType: 'Coupon' })
   @Patch(':id')
   update(@CurrentTenantId() tenantId: string, @Param('id') id: string, @Body() dto: UpdateCouponDto) {
     return this.couponsService.update(tenantId, id, dto);
   }
 
+  @Audit({ action: 'coupon.delete', entityType: 'Coupon' })
   @Delete(':id')
   remove(@CurrentTenantId() tenantId: string, @Param('id') id: string) {
     return this.couponsService.remove(tenantId, id);

@@ -10,15 +10,21 @@ import { AuthenticatedUser } from '../../../common/decorators';
 import { TenantRequest } from '../../../common/middleware/tenant.middleware';
 
 const REDACTED = '[redacted]';
-const SECRET_KEY_PATTERN = /password|secret|token/i;
+const SECRET_KEY_PATTERN = /password|secret|token|credentials/i;
 
-/** Blanks out anything that looks like a credential before it's persisted in metadata.request. */
-function redact(body: unknown): unknown {
-  if (!body || typeof body !== 'object') return body;
+/**
+ * Blanks out anything that looks like a credential before it's persisted in
+ * metadata.request. Recurses into nested objects/arrays — e.g. a payment
+ * provider's `credentials: { secretKey, publicKey }` — since a top-level-only
+ * check would leave secrets like `credentials.secretKey` unredacted.
+ */
+function redact(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redact);
+  if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(
-    Object.entries(body as Record<string, unknown>).map(([key, value]) => [
+    Object.entries(value as Record<string, unknown>).map(([key, val]) => [
       key,
-      SECRET_KEY_PATTERN.test(key) ? REDACTED : value,
+      SECRET_KEY_PATTERN.test(key) ? REDACTED : redact(val),
     ]),
   );
 }
@@ -46,7 +52,9 @@ export class AuditInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       tap((result) => {
-        const idParam = Array.isArray(req.params?.id) ? req.params.id[0] : req.params?.id;
+        const paramName = options.paramName ?? 'id';
+        const rawParam = req.params?.[paramName];
+        const idParam = Array.isArray(rawParam) ? rawParam[0] : rawParam;
         const entityId: string | undefined = idParam ?? (result as { id?: string } | undefined)?.id;
         const tenantId: string | undefined = req.tenantId ?? (options.entityType === 'Tenant' ? entityId : undefined);
 
