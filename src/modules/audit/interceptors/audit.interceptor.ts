@@ -55,8 +55,16 @@ export class AuditInterceptor implements NestInterceptor {
         const paramName = options.paramName ?? 'id';
         const rawParam = req.params?.[paramName];
         const idParam = Array.isArray(rawParam) ? rawParam[0] : rawParam;
-        const entityId: string | undefined = idParam ?? (result as { id?: string } | undefined)?.id;
-        const tenantId: string | undefined = req.tenantId ?? (options.entityType === 'Tenant' ? entityId : undefined);
+        const resultRecord = result as { id?: string; tenantId?: string } | undefined;
+        const entityId: string | undefined = idParam ?? resultRecord?.id;
+        // req.tenantId covers the common case (a tenant-scoped admin request);
+        // resultRecord.tenantId covers a platform-level action on a
+        // tenant-owned entity with no tenant context of its own on the
+        // request (e.g. SUPER_ADMIN moderating a product from /platform/*);
+        // the entityType==='Tenant' fallback covers acting on the tenant
+        // itself, where the entity's own id IS the tenant id.
+        const tenantId: string | undefined =
+          req.tenantId ?? resultRecord?.tenantId ?? (options.entityType === 'Tenant' ? entityId : undefined);
 
         this.auditLog
           .record({

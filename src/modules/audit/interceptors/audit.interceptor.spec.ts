@@ -116,6 +116,21 @@ describe('AuditInterceptor', () => {
     });
   });
 
+  it('falls back to the handler result tenantId for a platform action on a tenant-owned entity', (done) => {
+    const { interceptor, context, next, record } = buildInterceptor({
+      auditOptions: { action: 'product.moderate', entityType: 'Product' },
+      request: { params: { id: 'product-1' } },
+      handlerResult: { id: 'product-1', tenantId: 'tenant-owning-it' },
+    });
+
+    interceptor.intercept(context, next).subscribe(() => {
+      expect(record).toHaveBeenCalledWith(
+        expect.objectContaining({ entityId: 'product-1', tenantId: 'tenant-owning-it' }),
+      );
+      done();
+    });
+  });
+
   it('never lets an audit-log write failure propagate to the response', (done) => {
     const { interceptor, context, next, record } = buildInterceptor({
       auditOptions: { action: 'tenant.suspend', entityType: 'Tenant' },

@@ -1,9 +1,9 @@
-import { ConfigService } from '@nestjs/config';
 import type { Job } from 'bullmq';
 import * as nodemailer from 'nodemailer';
 import { EmailProcessor, EmailJobData } from './email.processor';
 import { EmailTemplatesService } from '../../modules/email-templates/email-templates.service';
 import { TenantsService } from '../../modules/tenants/tenants.service';
+import { PlatformSettingsService, PlatformMailConfig } from '../../modules/platform-settings/platform-settings.service';
 
 jest.mock('nodemailer');
 
@@ -25,7 +25,9 @@ function buildJob(data: Partial<EmailJobData> = {}): Job<EmailJobData> {
   } as unknown as Job<EmailJobData>;
 }
 
-function buildProcessor(options: { tenantSmtp?: Record<string, unknown> | null; platformHost?: string | null } = {}) {
+function buildProcessor(
+  options: { tenantSmtp?: Record<string, unknown> | null; platformMail?: PlatformMailConfig | null } = {},
+) {
   const sendMail = jest.fn().mockResolvedValue(undefined);
   (nodemailer.createTransport as jest.Mock).mockReturnValue({ sendMail });
 
@@ -33,19 +35,21 @@ function buildProcessor(options: { tenantSmtp?: Record<string, unknown> | null; 
   const tenants = {
     getDecryptedSmtpConfig: jest.fn().mockResolvedValue(options.tenantSmtp ?? null),
   } as unknown as TenantsService;
-  const platformHost = options.platformHost === undefined ? 'platform-smtp.example.com' : options.platformHost;
-  const config = {
-    get: (key: string) =>
-      ({
-        'mail.host': platformHost,
-        'mail.user': 'platform-user',
-        'mail.password': 'platform-pass',
-        'mail.port': 587,
-        'mail.from': 'platform@example.com',
-      })[key],
-  } as unknown as ConfigService;
+  const platformMail =
+    options.platformMail === undefined
+      ? {
+          host: 'platform-smtp.example.com',
+          port: 587,
+          user: 'platform-user',
+          password: 'platform-pass',
+          from: 'platform@example.com',
+        }
+      : options.platformMail;
+  const platformSettings = {
+    getDecryptedMailConfig: jest.fn().mockResolvedValue(platformMail),
+  } as unknown as PlatformSettingsService;
 
-  const processor = new EmailProcessor(emailTemplates, tenants, config);
+  const processor = new EmailProcessor(emailTemplates, tenants, platformSettings);
   return { processor, sendMail, tenants };
 }
 
@@ -94,7 +98,7 @@ describe('EmailProcessor — tenant SMTP override', () => {
   });
 
   it('logs instead of sending when neither the tenant nor the platform has SMTP configured', async () => {
-    const { processor, sendMail } = buildProcessor({ tenantSmtp: null, platformHost: null });
+    const { processor, sendMail } = buildProcessor({ tenantSmtp: null, platformMail: null });
 
     await processor.process(buildJob());
 

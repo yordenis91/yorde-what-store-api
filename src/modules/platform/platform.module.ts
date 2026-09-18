@@ -1,10 +1,13 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { AuditModule } from '../audit/audit.module';
+import { PlatformSettingsModule } from '../platform-settings/platform-settings.module';
 import { PlatformController } from './platform.controller';
 import { PlatformService } from './platform.service';
 import { PlatformTenantsController } from './tenants/platform-tenants.controller';
 import { PlatformTenantsService } from './tenants/platform-tenants.service';
+import { PlatformProductsController } from './products/platform-products.controller';
+import { PlatformProductsService } from './products/platform-products.service';
 
 @Module({
   // AuthModule re-exports JwtModule (see its own docstring) — reused here so
@@ -14,9 +17,10 @@ import { PlatformTenantsService } from './tenants/platform-tenants.service';
   // @Audit()-decorated endpoints (see modules/audit). It declares its own
   // AuditLogController (routes under /platform/audit-logs) — importing the
   // module is enough to activate those routes; they don't need re-declaring
-  // here too.
-  imports: [AuthModule, AuditModule],
-  controllers: [PlatformController, PlatformTenantsController],
-  providers: [PlatformService, PlatformTenantsService],
+  // here too. Same story for PlatformSettingsModule and /platform/settings —
+  // also used directly by PlatformService for the commission-rate default.
+  imports: [AuthModule, AuditModule, PlatformSettingsModule],
+  controllers: [PlatformController, PlatformTenantsController, PlatformProductsController],
+  providers: [PlatformService, PlatformTenantsService, PlatformProductsService],
 })
 export class PlatformModule {}

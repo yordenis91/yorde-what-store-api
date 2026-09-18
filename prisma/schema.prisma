@@ -409,6 +409,30 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+/// Módulo 8 (Configuración Global de Plataforma): a single row, its `id`
+/// pinned to the literal "singleton" so a second `create` collides on the
+/// primary key instead of silently forking platform config into two rows.
+/// Platform table, no tenant_id, no RLS — same footing as Plan/AuditLog.
+/// Replaces the old PLATFORM_DEFAULT_COMMISSION_RATE/SMTP_* env vars for the
+/// knobs that are genuinely business settings an admin should be able to
+/// change without a redeploy; infra secrets (backup S3 credentials, JWT
+/// secrets, payment gateway keys) deliberately stay env-only.
+model PlatformSettings {
+  id                    String   @id @default("singleton")
+  defaultCommissionRate Decimal  @default(5) @db.Decimal(5, 2) @map("default_commission_rate")
+  smtpEnabled           Boolean  @default(false) @map("smtp_enabled")
+  smtpHost              String?  @map("smtp_host")
+  smtpPort              Int?     @map("smtp_port")
+  smtpUser              String?  @map("smtp_user")
+  /// Encrypted at rest with the same AES-256-GCM helper as Tenant.smtpPassword — see common/utils/crypto.util.ts.
+  smtpPassword          String?  @map("smtp_password")
+  smtpFrom              String?  @map("smtp_from")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  @@map("platform_settings")
+}
+
 model TenantPaymentSetting {
   id          String          @id @default(uuid()) @db.Uuid
   tenantId    String          @map("tenant_id") @db.Uuid

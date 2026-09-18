@@ -1,7 +1,7 @@
 import { Test } from '@nestjs/testing';
-import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PlatformService } from './platform.service';
+import { PlatformSettingsService } from '../platform-settings/platform-settings.service';
 
 /**
  * The billing-summary math (MRR normalization across plan durations) is
@@ -33,12 +33,12 @@ function buildDouble(options: {
 }
 
 async function buildService(double: ReturnType<typeof buildDouble>) {
-  const config = { get: () => 5 } as unknown as ConfigService;
+  const platformSettings = { getDefaultCommissionRate: () => Promise.resolve(5) } as unknown as PlatformSettingsService;
   const moduleRef = await Test.createTestingModule({
     providers: [
       PlatformService,
       { provide: PrismaService, useValue: double },
-      { provide: ConfigService, useValue: config },
+      { provide: PlatformSettingsService, useValue: platformSettings },
     ],
   }).compile();
   return moduleRef.get(PlatformService);
@@ -152,8 +152,10 @@ describe('PlatformService period stats — commissions and GMV', () => {
       ),
     } as unknown as PrismaService;
 
-    const config = { get: () => options.defaultCommissionRate ?? 5 } as unknown as ConfigService;
-    return new PlatformService(prisma, config);
+    const platformSettings = {
+      getDefaultCommissionRate: () => Promise.resolve(options.defaultCommissionRate ?? 5),
+    } as unknown as PlatformSettingsService;
+    return new PlatformService(prisma, platformSettings);
   }
 
   it('uses the platform default rate for a tenant with no commissionRate override', async () => {

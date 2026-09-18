@@ -1,6 +1,5 @@
 import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { Job } from 'bullmq';
 import * as nodemailer from 'nodemailer';
 import { EMAIL_QUEUE } from '../queue.constants';
@@ -8,6 +7,7 @@ import { EmailTemplatesService } from '../../modules/email-templates/email-templ
 import { renderTemplate } from '../../modules/email-templates/template-renderer';
 import { EmailTemplateKey } from '../../modules/email-templates/default-templates';
 import { TenantsService } from '../../modules/tenants/tenants.service';
+import { PlatformSettingsService } from '../../modules/platform-settings/platform-settings.service';
 
 export interface EmailJobData {
   templateKey: EmailTemplateKey;
@@ -20,12 +20,11 @@ export interface EmailJobData {
 @Processor(EMAIL_QUEUE)
 export class EmailProcessor extends WorkerHost {
   private readonly logger = new Logger(EmailProcessor.name);
-  private transporter?: nodemailer.Transporter;
 
   constructor(
     private readonly emailTemplates: EmailTemplatesService,
     private readonly tenants: TenantsService,
-    private readonly config: ConfigService,
+    private readonly platformSettings: PlatformSettingsService,
   ) {
     super();
   }
@@ -42,8 +41,11 @@ export class EmailProcessor extends WorkerHost {
     const body = renderTemplate(template.body, variables);
 
     const tenantSmtp = await this.tenants.getDecryptedSmtpConfig(tenantId);
-    const host = tenantSmtp?.host ?? this.config.get<string>('mail.host');
-    if (!host) {
+    // The platform default "from" still applies even when the tenant has a
+    // host but no override of its own, so this is fetched whenever either
+    // the host or the from-address might need to fall back to it.
+    const platformSmtp = tenantSmtp && tenantSmtp.from ? null : await this.platformSettings.getDecryptedMailConfig();
+    if (!tenantSmtp && !platformSmtp) {
       // No SMTP configured (typical in dev) — logging keeps the queue fully
       // functional end to end without requiring real mail infrastructure.
       this.logger.log(`[no SMTP configured] Would send "${subject}" to ${to}:\n${body}`);
@@ -52,8 +54,8 @@ export class EmailProcessor extends WorkerHost {
 
     const transporter = tenantSmtp
       ? buildTransporter(tenantSmtp.host, tenantSmtp.port, tenantSmtp.user, tenantSmtp.password)
-      : this.getPlatformTransporter(host);
-    const from = tenantSmtp?.from || this.config.get<string>('mail.from');
+      : buildTransporter(platformSmtp!.host, platformSmtp!.port, platformSmtp!.user, platformSmtp!.password);
+    const from = tenantSmtp?.from || platformSmtp?.from;
 
     await transporter.sendMail({ from, to, subject, text: body });
     this.logger.log(`Sent "${subject}" to ${to}${tenantSmtp ? ' via tenant SMTP' : ''}`);
@@ -74,23 +76,13 @@ export class EmailProcessor extends WorkerHost {
         `${exhausted ? ' — giving up' : ', will retry'}: ${job.failedReason}`,
     );
   }
-
-  /** Platform default — cached, since its credentials come from static env config. */
-  private getPlatformTransporter(host: string): nodemailer.Transporter {
-    if (!this.transporter) {
-      const user = this.config.get<string>('mail.user');
-      const password = this.config.get<string>('mail.password');
-      const port = this.config.get<number>('mail.port') ?? 587;
-      this.transporter = buildTransporter(host, port, user, password);
-    }
-    return this.transporter;
-  }
 }
 
 /**
- * Not cached: a tenant's SMTP settings can change between sends, and this
- * (unlike a pooled transporter) opens no connection until `sendMail` is
- * called, so building one fresh per send costs nothing.
+ * Never cached: a tenant's SMTP settings can change between sends, and now
+ * so can the platform default (Módulo 8 makes it admin-editable at runtime,
+ * not just an env var read once at boot) — building fresh per send costs
+ * nothing since this doesn't open a connection until `sendMail` is called.
  */
 function buildTransporter(host: string, port: number, user?: string, password?: string): nodemailer.Transporter {
   return nodemailer.createTransport({

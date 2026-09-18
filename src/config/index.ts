@@ -46,7 +46,14 @@ export const mercadoPagoConfig = registerAs('mercadoPago', () => ({
   webhookSecret: process.env.MERCADOPAGO_WEBHOOK_SECRET,
 }));
 
-/** Platform-wide fallback SMTP, used when a tenant hasn't set up their own (see Tenant.smtpEnabled, EmailProcessor). */
+/**
+ * Legacy platform-wide fallback SMTP. Since Módulo 8 (Configuración Global de
+ * Plataforma / PlatformSettings), these vars are read exactly once — by
+ * PlatformSettingsService, to seed its DB row the first time the app boots
+ * against an existing deployment — and never again; EmailProcessor's actual
+ * fallback path goes through that row, not this config, so an admin edit
+ * takes effect without a redeploy.
+ */
 export const mailConfig = registerAs('mail', () => ({
   host: process.env.SMTP_HOST,
   port: parseInt(process.env.SMTP_PORT ?? '587', 10),
@@ -92,11 +99,11 @@ export const backupConfig = registerAs('backup', () => ({
 }));
 
 /**
- * Stopgap until Módulo 8 (Configuración Global de Plataforma) exists: the
- * take-rate used for the platform dashboard's commission estimate on any
- * tenant that hasn't been given its own override (Tenant.commissionRate).
- * Env-only for now, same as every other cross-cutting constant here — once
- * there's a real settings table/UI, this becomes its seeded default instead.
+ * Legacy default commission rate. Since Módulo 8 (PlatformSettings), this var
+ * is read exactly once — by PlatformSettingsService, to seed its DB row on
+ * first boot against an existing deployment — and never again; the live
+ * default now comes from that row, editable from the platform settings page
+ * without a redeploy.
  */
 export const platformConfig = registerAs('platform', () => ({
   defaultCommissionRate: parseFloat(process.env.PLATFORM_DEFAULT_COMMISSION_RATE ?? '5'),

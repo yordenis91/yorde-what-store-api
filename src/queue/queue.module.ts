@@ -14,11 +14,13 @@ import { OrderNotificationProcessor } from './processors/order-notification.proc
 import { VisitsCleanupProcessor } from './processors/visits-cleanup.processor';
 import { EmailTemplatesModule } from '../modules/email-templates/email-templates.module';
 import { TenantsModule } from '../modules/tenants/tenants.module';
+import { PlatformSettingsModule } from '../modules/platform-settings/platform-settings.module';
 
 @Module({
   imports: [
     EmailTemplatesModule,
     TenantsModule,
+    PlatformSettingsModule,
     BullModule.registerQueue(
       { name: EMAIL_QUEUE },
       { name: INVOICE_PDF_QUEUE },

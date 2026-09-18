@@ -1,14 +1,14 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { DashboardRange } from '../dashboard/dto/dashboard-query.dto';
 import { buildDayBuckets, dayKey, rangeDays, rangeStart } from '../../common/utils/date-range-buckets.util';
+import { PlatformSettingsService } from '../platform-settings/platform-settings.service';
 
 @Injectable()
 export class PlatformService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly config: ConfigService,
+    private readonly platformSettings: PlatformSettingsService,
   ) {}
 
   async getSummary(range: DashboardRange = '7d') {
@@ -101,7 +101,7 @@ export class PlatformService {
         revenue,
       }));
 
-    const defaultCommissionRate = this.config.get<number>('platform.defaultCommissionRate') ?? 5;
+    const defaultCommissionRate = await this.platformSettings.getDefaultCommissionRate();
     let commissionsTotal = 0;
     for (const order of periodPaidOrders) {
       const override = tenantById.get(order.tenantId)?.commissionRate;
