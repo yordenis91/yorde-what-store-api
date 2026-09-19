@@ -21,7 +21,7 @@ import { TenantRequiredGuard } from '../../common/guards';
 import { TenantRequest } from '../../common/middleware/tenant.middleware';
 import { UploadImageDto } from './dto/upload-image.dto';
 
-const UPLOADS_ROOT = join(process.cwd(), 'uploads');
+export const UPLOADS_ROOT = join(process.cwd(), 'uploads');
 const ALLOWED_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 // Generous cap on what a phone camera hands us before processing — the
 // output written to disk ends up nowhere near this, see resizeToWebp below.

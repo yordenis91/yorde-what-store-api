@@ -1,9 +1,16 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { rm } from 'node:fs/promises';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { PaginationDto } from '../../../common/dto/pagination.dto';
 import { PlatformTenantsService } from './platform-tenants.service';
+
+jest.mock('node:fs/promises', () => ({ rm: jest.fn().mockResolvedValue(undefined) }));
+
+beforeEach(() => {
+  (rm as jest.Mock).mockClear();
+});
 
 const TENANT_ID = 'tenant-1';
 const ACTOR = { id: 'admin-1', email: 'admin@yws.dev', globalRole: 'SUPER_ADMIN' };
@@ -39,6 +46,7 @@ function buildService(overrides: { tenant?: Record<string, unknown> | null } = {
   const memberFindMany = jest.fn().mockResolvedValue([]);
   const memberCount = jest.fn().mockResolvedValue(0);
 
+  const rlsTenantDelete = jest.fn().mockResolvedValue(existingTenant);
   const withRlsBypass = jest.fn().mockImplementation((work) =>
     work({
       product: { count: jest.fn().mockResolvedValue(3) },
@@ -47,6 +55,7 @@ function buildService(overrides: { tenant?: Record<string, unknown> | null } = {
         findMany: jest.fn().mockResolvedValue([{ grandTotal: 100 }, { grandTotal: 50 }]),
       },
       tenantMember: { count: jest.fn().mockResolvedValue(2) },
+      tenant: { delete: rlsTenantDelete },
     }),
   );
 
@@ -89,6 +98,7 @@ function buildService(overrides: { tenant?: Record<string, unknown> | null } = {
     noteCreate,
     impersonationLogCreate,
     memberFindMany,
+    rlsTenantDelete,
     jwt,
   };
 }
@@ -300,5 +310,46 @@ describe('PlatformTenantsService.listMembers', () => {
     const { service } = buildService({ tenant: { id: TENANT_ID, deletedAt: new Date() } });
 
     await expect(service.listMembers(TENANT_ID, PAGINATION)).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('PlatformTenantsService.purge', () => {
+  it('rejects when confirmSlug does not match the tenant slug, and deletes nothing', async () => {
+    const { service, rlsTenantDelete } = buildService({
+      tenant: { id: TENANT_ID, slug: 'acme', deletedAt: null },
+    });
+
+    await expect(service.purge(TENANT_ID, { confirmSlug: 'wrong-slug' })).rejects.toBeInstanceOf(BadRequestException);
+    expect(rlsTenantDelete).not.toHaveBeenCalled();
+    expect(rm).not.toHaveBeenCalled();
+  });
+
+  it('throws NotFoundException for a tenant that does not exist', async () => {
+    const { service } = buildService({ tenant: null });
+
+    await expect(service.purge(TENANT_ID, { confirmSlug: 'anything' })).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('works on an already soft-deleted tenant (unlike suspend/activate/update)', async () => {
+    const { service, rlsTenantDelete } = buildService({
+      tenant: { id: TENANT_ID, slug: 'acme', deletedAt: new Date() },
+    });
+
+    const result = await service.purge(TENANT_ID, { confirmSlug: 'acme' });
+
+    expect(rlsTenantDelete).toHaveBeenCalledWith({ where: { id: TENANT_ID } });
+    expect(result).toEqual({ purged: true, tenantId: TENANT_ID, slug: 'acme' });
+  });
+
+  it('deletes the tenant via withRlsBypass and cleans up its uploaded files and invoices on disk', async () => {
+    const { service, rlsTenantDelete } = buildService({
+      tenant: { id: TENANT_ID, slug: 'acme', deletedAt: null },
+    });
+
+    await service.purge(TENANT_ID, { confirmSlug: 'acme' });
+
+    expect(rlsTenantDelete).toHaveBeenCalledWith({ where: { id: TENANT_ID } });
+    expect(rm).toHaveBeenCalledWith(expect.stringContaining(TENANT_ID), { recursive: true, force: true });
+    expect(rm).toHaveBeenCalledTimes(2); // uploads/<id> and invoices/<id>
   });
 });

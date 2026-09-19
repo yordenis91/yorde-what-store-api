@@ -3,16 +3,21 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Prisma, TenantStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { PaginatedResult, PaginationDto } from '../../../common/dto/pagination.dto';
 import { AuthenticatedUser } from '../../../common/decorators';
 import { maskSmtpPassword } from '../../../common/utils/mask-tenant-secrets.util';
 import { JwtPayload } from '../../auth/strategies/jwt.strategy';
+import { UPLOADS_ROOT } from '../../uploads/uploads.controller';
+import { INVOICES_ROOT } from '../../../queue/processors/invoice-storage.util';
 import {
   ActivateTenantDto,
   CreateTenantAdminDto,
   CreateTenantNoteDto,
   ImpersonateTenantDto,
+  PurgeTenantDto,
   SuspendTenantDto,
   TenantAdminQueryDto,
   UpdateTenantAdminDto,
@@ -175,6 +180,44 @@ export class PlatformTenantsService {
     await this.findActiveOrThrow(id);
     await this.prisma.tenant.update({ where: { id }, data: { deletedAt: new Date(), isActive: false } });
     return { deleted: true };
+  }
+
+  /**
+   * Irreversible. Unlike `softDelete`, this works on a tenant regardless of
+   * its current `deletedAt`/`status` — soft-deleting first is not required.
+   * `dto.confirmSlug` must match the tenant's own slug, the same "type the
+   * name to confirm" pattern GitHub/Shopify use before a destructive delete,
+   * so a single misclick on the wrong row can't destroy the wrong store.
+   *
+   * `tenant.delete` cascades through every tenant-owned table at the
+   * Postgres level (every `tenantId` foreign key in schema.prisma is
+   * `onDelete: Cascade`) — products, orders, customers, coupons, notes,
+   * status history, impersonation logs, everything. That cascade still has
+   * to satisfy `FORCE ROW LEVEL SECURITY` on each of those tables, which is
+   * why this runs inside `withRlsBypass` rather than the plain client.
+   *
+   * Two things the cascade does *not* reach, cleaned up separately below:
+   * uploaded files on disk (`uploads/<tenantId>/`, `invoices/<tenantId>/`),
+   * since they live outside Postgres entirely. `AuditLog` rows are also left
+   * untouched on purpose — they carry `tenantId` as a plain denormalized
+   * field with no foreign key, specifically so the audit trail survives the
+   * entity it describes.
+   */
+  async purge(id: string, dto: PurgeTenantDto) {
+    const tenant = await this.prisma.tenant.findUnique({ where: { id } });
+    if (!tenant) throw new NotFoundException('Tenant not found');
+    if (dto.confirmSlug !== tenant.slug) {
+      throw new BadRequestException('confirmSlug does not match this tenant — nothing was deleted');
+    }
+
+    await this.prisma.withRlsBypass((tx) => tx.tenant.delete({ where: { id } }));
+
+    await Promise.all([
+      rm(join(UPLOADS_ROOT, id), { recursive: true, force: true }),
+      rm(join(INVOICES_ROOT, id), { recursive: true, force: true }),
+    ]);
+
+    return { purged: true, tenantId: id, slug: tenant.slug };
   }
 
   async suspend(id: string, dto: SuspendTenantDto, actor: AuthenticatedUser, ctx: RequestContext = {}) {

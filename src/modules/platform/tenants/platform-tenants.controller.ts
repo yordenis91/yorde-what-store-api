@@ -12,6 +12,7 @@ import {
   CreateTenantAdminDto,
   CreateTenantNoteDto,
   ImpersonateTenantDto,
+  PurgeTenantDto,
   SuspendTenantDto,
   TenantAdminQueryDto,
   UpdateTenantAdminDto,
@@ -58,6 +59,17 @@ export class PlatformTenantsController {
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.tenantsService.softDelete(id);
+  }
+
+  @ApiOperation({
+    summary:
+      "Permanently delete a tenant and everything it owns (products, orders, customers, uploaded files, ...). Irreversible — requires confirmSlug to match the tenant's slug.",
+  })
+  @Audit({ action: 'tenant.purge', entityType: 'Tenant' })
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post(':id/purge')
+  purge(@Param('id') id: string, @Body() dto: PurgeTenantDto) {
+    return this.tenantsService.purge(id, dto);
   }
 
   @ApiOperation({ summary: 'Suspend a tenant (requires a reason; recorded in its status history)' })
