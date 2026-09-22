@@ -1,6 +1,5 @@
 import { Test } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
-import { SchedulerRegistry } from '@nestjs/schedule';
 import { BackupsService, selectStaleKeys, toPgToolsUrl } from './backups.service';
 
 describe('toPgToolsUrl', () => {
@@ -58,14 +57,9 @@ describe('BackupsService.isConfigured', () => {
   function buildService(env: Record<string, string | undefined>) {
     const config = new Map(Object.entries(env));
     const configService = { get: (key: string) => config.get(key) } as unknown as ConfigService;
-    const scheduler = { addCronJob: jest.fn() } as unknown as SchedulerRegistry;
 
     return Test.createTestingModule({
-      providers: [
-        BackupsService,
-        { provide: ConfigService, useValue: configService },
-        { provide: SchedulerRegistry, useValue: scheduler },
-      ],
+      providers: [BackupsService, { provide: ConfigService, useValue: configService }],
     })
       .compile()
       .then((moduleRef) => moduleRef.get(BackupsService));
@@ -111,55 +105,6 @@ describe('BackupsService.isConfigured', () => {
   });
 });
 
-/**
- * Regression: a malformed BACKUP_CRON threw straight out of the `cron`
- * package's constructor, synchronously, during onModuleInit — Nest doesn't
- * catch that, so it took the whole process down on boot. A misconfigured
- * optional feature must disable itself, not the entire API.
- */
-describe('BackupsService.onModuleInit', () => {
-  const configuredEnv = {
-    'backup.databaseUrl': 'postgresql://yws_backup:pw@host:5432/db',
-    'backup.s3Endpoint': 'https://example.r2.cloudflarestorage.com',
-    'backup.s3Bucket': 'yws-backups',
-    'backup.s3AccessKeyId': 'key',
-    'backup.s3SecretAccessKey': 'secret',
-    'backup.s3Prefix': 'postgres',
-    'backup.s3Region': 'auto',
-    'backup.retentionCount': '14',
-  };
-
-  async function buildService(cron: string) {
-    const config = new Map(Object.entries({ ...configuredEnv, 'backup.cron': cron }));
-    const configService = { get: (key: string) => config.get(key) } as unknown as ConfigService;
-    const scheduler = { addCronJob: jest.fn() } as unknown as SchedulerRegistry;
-
-    const moduleRef = await Test.createTestingModule({
-      providers: [
-        BackupsService,
-        { provide: ConfigService, useValue: configService },
-        { provide: SchedulerRegistry, useValue: scheduler },
-      ],
-    }).compile();
-
-    return { service: moduleRef.get(BackupsService), scheduler };
-  }
-
-  it('registers and starts the job for a valid cron expression', async () => {
-    const { service, scheduler } = await buildService('0 3 * * *');
-
-    expect(() => service.onModuleInit()).not.toThrow();
-    expect(scheduler.addCronJob).toHaveBeenCalledWith('postgres-backup', expect.anything());
-
-    // Stop the real timer the job started, so it doesn't outlive this test.
-    const [, job] = (scheduler.addCronJob as jest.Mock).mock.calls[0];
-    job.stop();
-  });
-
-  it('disables scheduled backups instead of crashing on an invalid cron expression', async () => {
-    const { service, scheduler } = await buildService('not a cron expression');
-
-    expect(() => service.onModuleInit()).not.toThrow();
-    expect(scheduler.addCronJob).not.toHaveBeenCalled();
-  });
-});
+// Scheduling (previously an in-process @nestjs/schedule CronJob tested here)
+// now lives in BackupsModule as a BullMQ repeatable job — see
+// backups.module.spec.ts. BackupsService itself no longer schedules anything.

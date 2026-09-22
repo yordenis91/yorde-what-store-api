@@ -1,7 +1,5 @@
-import { Injectable, Logger, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { SchedulerRegistry } from '@nestjs/schedule';
-import { CronJob } from 'cron';
 import {
   S3Client,
   PutObjectCommand,
@@ -80,17 +78,14 @@ export function toPgToolsUrl(databaseUrl: string): string {
  * has to remember correctly under pressure during a real incident.
  */
 @Injectable()
-export class BackupsService implements OnModuleInit {
+export class BackupsService {
   private readonly logger = new Logger(BackupsService.name);
   private readonly s3: S3Client | null;
   private readonly bucket?: string;
   private readonly prefix: string;
   private readonly retentionCount: number;
 
-  constructor(
-    private readonly config: ConfigService,
-    private readonly scheduler: SchedulerRegistry,
-  ) {
+  constructor(private readonly config: ConfigService) {
     this.bucket = this.config.get<string>('backup.s3Bucket');
     this.prefix = this.config.get<string>('backup.s3Prefix')!;
     this.retentionCount = this.config.get<number>('backup.retentionCount')!;
@@ -109,32 +104,6 @@ export class BackupsService implements OnModuleInit {
       this.s3 = null;
       this.logger.warn('Backups disabled: BACKUP_S3_* env vars not set — set them to enable scheduled backups');
     }
-  }
-
-  /**
-   * Registered here rather than via a `@Cron(...)` decorator argument: a
-   * decorator argument is evaluated at class-definition time, which for this
-   * file happens while Node is still resolving imports — before
-   * ConfigModule's dotenv loading has necessarily run for local `.env`-file
-   * development. Reading the cron expression through ConfigService instead,
-   * once Nest's DI container is fully up, sidesteps that ordering entirely.
-   */
-  onModuleInit() {
-    if (!this.isConfigured()) return;
-    const cronExpression = this.config.get<string>('backup.cron')!;
-    let job: CronJob;
-    try {
-      job = new CronJob(cronExpression, () => this.handleScheduledBackup());
-    } catch (err) {
-      // A malformed BACKUP_CRON must disable this one optional feature, not
-      // crash the whole process — every other module still has to boot.
-      this.logger.error(
-        `Invalid BACKUP_CRON "${cronExpression}": ${(err as Error).message} — scheduled backups are disabled until this is fixed`,
-      );
-      return;
-    }
-    this.scheduler.addCronJob('postgres-backup', job);
-    job.start();
   }
 
   isConfigured(): boolean {
