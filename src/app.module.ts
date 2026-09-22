@@ -21,6 +21,7 @@ import {
   backupConfig,
   platformConfig,
 } from './config';
+import { validateEnv } from './config/validate-env';
 import { winstonLoggerOptions } from './logger/winston.config';
 
 import { PrismaModule } from './prisma/prisma.module';
@@ -58,6 +59,7 @@ import { AppService } from './app.service';
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: ['.env.local', '.env'],
+      validate: validateEnv,
       load: [
         appConfig,
         jwtConfig,

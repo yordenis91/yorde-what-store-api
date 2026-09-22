@@ -66,8 +66,9 @@ export const totpConfig = registerAs('totp', () => ({
   issuer: process.env.TOTP_ISSUER ?? 'YWS',
 }));
 
+/** `validateEnv` (see app.module.ts) refuses to boot the app without ENCRYPTION_KEY set — no fallback here, on purpose. A silent fallback to JWT_SECRET or a literal once meant every deployment that forgot this var encrypted tenant payment credentials with the same publicly-known key. */
 export const securityConfig = registerAs('security', () => ({
-  encryptionKey: process.env.ENCRYPTION_KEY ?? process.env.JWT_SECRET ?? 'insecure-dev-key',
+  encryptionKey: process.env.ENCRYPTION_KEY!,
 }));
 
 /**
