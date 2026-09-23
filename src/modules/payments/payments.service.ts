@@ -9,6 +9,16 @@ import { StripeAdapter } from './adapters/stripe.adapter';
 import { MercadoPagoAdapter } from './adapters/mercadopago.adapter';
 import { INVOICE_PDF_QUEUE } from '../../queue/queue.constants';
 
+/**
+ * Both providers retry undelivered webhooks, and a delivery can simply
+ * arrive late. Without this, a "payment confirmed" webhook queued before a
+ * manual refund — and delivered (or redelivered) after — silently flipped
+ * the order back to PAID/CONFIRMED even though the money had already gone
+ * back to the customer. Matches OrdersService's own terminal-status guard:
+ * once CANCELLED or REFUNDED, nothing moves the order out of it again.
+ */
+const TERMINAL_ORDER_STATUSES = ['CANCELLED', 'REFUNDED'];
+
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
@@ -78,6 +88,14 @@ export class PaymentsService {
       }
 
       await this.prisma.withTenant(tenantId, async (tx) => {
+        const existing = await tx.order.findUnique({ where: { id: orderId } });
+        if (!existing || TERMINAL_ORDER_STATUSES.includes(existing.status)) {
+          this.logger.warn(
+            `Stripe checkout.session.completed for order ${orderId} ignored — order is ${existing?.status ?? 'missing'}`,
+          );
+          return;
+        }
+
         const order = await tx.order.update({
           where: { id: orderId },
           data: {
@@ -177,6 +195,14 @@ export class PaymentsService {
 
     if (payment.status === 'approved') {
       await this.prisma.withTenant(tenantId, async (tx) => {
+        const existing = await tx.order.findUnique({ where: { id: orderId } });
+        if (!existing || TERMINAL_ORDER_STATUSES.includes(existing.status)) {
+          this.logger.warn(
+            `MercadoPago payment ${dataId} approval for order ${orderId} ignored — order is ${existing?.status ?? 'missing'}`,
+          );
+          return;
+        }
+
         const order = await tx.order.update({
           where: { id: orderId },
           data: { paymentStatus: 'PAID', status: 'CONFIRMED', mercadoPagoPaymentId: String(payment.id) },

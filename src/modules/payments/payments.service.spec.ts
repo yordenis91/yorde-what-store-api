@@ -11,21 +11,29 @@ const TENANT_ID = 'tenant-1';
 function buildService(
   overrides: {
     order?: Record<string, unknown> | null;
+    /** The row `tx.order.findUnique` reports inside the webhook transaction — defaults to `order`. */
+    existingOrder?: Record<string, unknown> | null;
     mercadoPagoAdapter?: Partial<MercadoPagoAdapter>;
     stripeAdapter?: Partial<StripeAdapter>;
   } = {},
 ) {
   const update = jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'order-1', ...data }));
   const findFirst = jest.fn().mockResolvedValue(overrides.order ?? null);
+  const existingOrder = 'existingOrder' in overrides ? overrides.existingOrder : { id: 'order-1', status: 'PENDING' };
+  const findUnique = jest.fn().mockResolvedValue(existingOrder);
   const withTenant = jest
     .fn()
-    .mockImplementation((_tenantId: string, work: (tx: unknown) => unknown) => work({ order: { update } }));
+    .mockImplementation((_tenantId: string, work: (tx: unknown) => unknown) => work({ order: { update, findUnique } }));
 
   const prisma = { db: { order: { findFirst, update } }, withTenant } as unknown as PrismaService;
   const tenantsService = {
     getDecryptedCredentials: jest.fn().mockResolvedValue(null),
   } as unknown as TenantsService;
-  const stripeAdapter = { refund: jest.fn(), ...overrides.stripeAdapter } as unknown as StripeAdapter;
+  const stripeAdapter = {
+    refund: jest.fn(),
+    verifyAndParseWebhook: jest.fn(),
+    ...overrides.stripeAdapter,
+  } as unknown as StripeAdapter;
   const mercadoPagoAdapter = {
     createCheckout: jest.fn(),
     verifyWebhookSignature: jest.fn(),
@@ -36,7 +44,17 @@ function buildService(
   const invoiceQueue = { add: jest.fn() };
 
   const service = new PaymentsService(prisma, tenantsService, stripeAdapter, mercadoPagoAdapter, invoiceQueue as any);
-  return { service, update, findFirst, withTenant, tenantsService, stripeAdapter, mercadoPagoAdapter, invoiceQueue };
+  return {
+    service,
+    update,
+    findFirst,
+    findUnique,
+    withTenant,
+    tenantsService,
+    stripeAdapter,
+    mercadoPagoAdapter,
+    invoiceQueue,
+  };
 }
 
 describe('PaymentsService.createMercadoPagoCheckout', () => {
@@ -58,6 +76,79 @@ describe('PaymentsService.createMercadoPagoCheckout', () => {
 
     expect(result).toEqual({ checkoutUrl: 'https://mp/pay', providerReference: 'pref-1' });
     expect(update).toHaveBeenCalledWith({ where: { id: 'order-1' }, data: { mercadoPagoPreferenceId: 'pref-1' } });
+  });
+});
+
+describe('PaymentsService.handleStripeWebhook', () => {
+  function checkoutCompletedEvent(overrides: Record<string, unknown> = {}) {
+    return {
+      type: 'checkout.session.completed',
+      data: {
+        object: {
+          id: 'cs_123',
+          payment_intent: 'pi_123',
+          metadata: { tenantId: TENANT_ID, orderId: 'order-1' },
+          ...overrides,
+        },
+      },
+    };
+  }
+
+  it('rejects a webhook with an invalid signature', async () => {
+    const verifyAndParseWebhook = jest.fn().mockImplementation(() => {
+      throw new Error('bad signature');
+    });
+    const { service } = buildService({ stripeAdapter: { verifyAndParseWebhook } });
+
+    await expect(service.handleStripeWebhook(Buffer.from(''), 'sig')).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('marks the order paid and queues the invoice once checkout completes', async () => {
+    const verifyAndParseWebhook = jest.fn().mockReturnValue(checkoutCompletedEvent());
+    const { service, withTenant, update, invoiceQueue } = buildService({
+      stripeAdapter: { verifyAndParseWebhook },
+    });
+
+    const result = await service.handleStripeWebhook(Buffer.from(''), 'sig');
+
+    expect(result).toEqual({ received: true });
+    expect(withTenant).toHaveBeenCalledWith(TENANT_ID, expect.any(Function));
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'order-1' }, data: expect.objectContaining({ paymentStatus: 'PAID' }) }),
+    );
+    expect(invoiceQueue.add).toHaveBeenCalledWith('generate-invoice', { tenantId: TENANT_ID, orderId: 'order-1' });
+  });
+
+  /**
+   * Regression: both providers retry webhook delivery, and a delivery can
+   * simply arrive late. A `checkout.session.completed` for an order an admin
+   * already refunded (or cancelled) must not silently revive it to
+   * PAID/CONFIRMED — the money is already back with the customer.
+   */
+  it('ignores a late checkout.session.completed for an order that is already refunded', async () => {
+    const verifyAndParseWebhook = jest.fn().mockReturnValue(checkoutCompletedEvent());
+    const { service, update, invoiceQueue } = buildService({
+      stripeAdapter: { verifyAndParseWebhook },
+      existingOrder: { id: 'order-1', status: 'REFUNDED' },
+    });
+
+    const result = await service.handleStripeWebhook(Buffer.from(''), 'sig');
+
+    expect(result).toEqual({ received: true });
+    expect(update).not.toHaveBeenCalled();
+    expect(invoiceQueue.add).not.toHaveBeenCalled();
+  });
+
+  it('ignores a late checkout.session.completed for an order that was cancelled', async () => {
+    const verifyAndParseWebhook = jest.fn().mockReturnValue(checkoutCompletedEvent());
+    const { service, update } = buildService({
+      stripeAdapter: { verifyAndParseWebhook },
+      existingOrder: { id: 'order-1', status: 'CANCELLED' },
+    });
+
+    await service.handleStripeWebhook(Buffer.from(''), 'sig');
+
+    expect(update).not.toHaveBeenCalled();
   });
 });
 
@@ -107,6 +198,25 @@ describe('PaymentsService.handleMercadoPagoWebhook', () => {
     await service.handleMercadoPagoWebhook({}, '12345', 'payment');
 
     expect(withTenant).not.toHaveBeenCalled();
+  });
+
+  /** Same regression as the Stripe webhook: a late/retried approval must not revive a refunded or cancelled order. */
+  it('ignores a late payment approval for an order that is already refunded', async () => {
+    const getPayment = jest.fn().mockResolvedValue({
+      id: 12345,
+      status: 'approved',
+      metadata: { tenant_id: TENANT_ID, order_id: 'order-1' },
+    });
+    const { service, update, invoiceQueue } = buildService({
+      mercadoPagoAdapter: { getPayment },
+      existingOrder: { id: 'order-1', status: 'REFUNDED' },
+    });
+
+    const result = await service.handleMercadoPagoWebhook({}, '12345', 'payment');
+
+    expect(result).toEqual({ received: true });
+    expect(update).not.toHaveBeenCalled();
+    expect(invoiceQueue.add).not.toHaveBeenCalled();
   });
 });
 
