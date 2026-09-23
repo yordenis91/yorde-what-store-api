@@ -27,5 +27,18 @@ export function validateEnv(config: Record<string, unknown>): Record<string, unk
     );
   }
 
+  // An empty CORS_ORIGINS makes main.ts's enableCors() reflect back whatever
+  // Origin the browser sends, with credentials — silently, with no warning.
+  // Fine for local dev; a real deployment that forgot to set it should not
+  // come up "healthy" and only get noticed by whoever finds the open CORS
+  // policy first.
+  const corsOrigins = config.CORS_ORIGINS;
+  const corsOriginsEmpty = typeof corsOrigins !== 'string' || corsOrigins.trim() === '';
+  if (config.NODE_ENV === 'production' && corsOriginsEmpty) {
+    throw new Error(
+      'CORS_ORIGINS is required when NODE_ENV=production — an unset or empty value means any origin is allowed with credentials. Set it to a comma-separated allowlist.',
+    );
+  }
+
   return config;
 }

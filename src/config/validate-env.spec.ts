@@ -32,4 +32,29 @@ describe('validateEnv', () => {
       /DATABASE_URL.*JWT_SECRET.*JWT_REFRESH_SECRET.*JWT_CUSTOMER_SECRET.*JWT_CUSTOMER_REFRESH_SECRET.*ENCRYPTION_KEY/s,
     );
   });
+
+  describe('CORS_ORIGINS in production', () => {
+    it('throws when NODE_ENV=production and CORS_ORIGINS is unset', () => {
+      expect(() => validateEnv({ ...VALID_ENV, NODE_ENV: 'production' })).toThrow(/CORS_ORIGINS/);
+    });
+
+    it('throws when NODE_ENV=production and CORS_ORIGINS is an empty string', () => {
+      expect(() => validateEnv({ ...VALID_ENV, NODE_ENV: 'production', CORS_ORIGINS: '' })).toThrow(/CORS_ORIGINS/);
+    });
+
+    it('throws when NODE_ENV=production and CORS_ORIGINS is only whitespace', () => {
+      expect(() => validateEnv({ ...VALID_ENV, NODE_ENV: 'production', CORS_ORIGINS: '   ' })).toThrow(/CORS_ORIGINS/);
+    });
+
+    it('passes when NODE_ENV=production and CORS_ORIGINS is set', () => {
+      expect(() =>
+        validateEnv({ ...VALID_ENV, NODE_ENV: 'production', CORS_ORIGINS: 'https://app.example.com' }),
+      ).not.toThrow();
+    });
+
+    it('does not require CORS_ORIGINS outside production', () => {
+      expect(() => validateEnv({ ...VALID_ENV, NODE_ENV: 'development' })).not.toThrow();
+      expect(() => validateEnv({ ...VALID_ENV })).not.toThrow();
+    });
+  });
 });

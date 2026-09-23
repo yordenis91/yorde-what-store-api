@@ -89,7 +89,11 @@ export class CustomersAuthController {
     if (!token) throw new BadRequestException('Missing refresh token');
     res.cookie(REFRESH_COOKIE, token, {
       httpOnly: true,
-      secure: this.config.get<string>('app.env') === 'production',
+      // Secure by default: an operator forgetting to set NODE_ENV=production
+      // must not silently ship refresh tokens without the Secure flag.
+      // Opting into the insecure (non-HTTPS) behavior takes an explicit
+      // NODE_ENV=development instead.
+      secure: this.config.get<string>('app.env') !== 'development',
       sameSite: 'lax',
       path: '/',
       maxAge: 30 * 24 * 60 * 60 * 1000,
