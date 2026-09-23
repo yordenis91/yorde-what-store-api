@@ -52,6 +52,8 @@ function createPrismaDouble(options: {
   orders?: Record<string, unknown>[];
   /** Rows each conditional stock update reports as changed, in call order. */
   stockUpdateCounts?: number[];
+  /** Rows the conditional coupon-redemption update reports as changed. Defaults to 1 (succeeds). */
+  couponUpdateCount?: number;
 }) {
   const products = options.products ?? [buildProduct()];
   const tenant = {
@@ -91,7 +93,7 @@ function createPrismaDouble(options: {
     },
     coupon: {
       findFirst: jest.fn().mockResolvedValue(options.coupon ?? null),
-      update: jest.fn().mockResolvedValue({}),
+      updateMany: jest.fn().mockResolvedValue({ count: options.couponUpdateCount ?? 1 }),
     },
     shipping: {
       findFirst: jest.fn().mockResolvedValue(options.shipping ?? null),
@@ -267,6 +269,53 @@ describe('OrdersService pricing', () => {
     const b = await buildService(createPrismaDouble({ coupon: usedUp }));
     await expect(b.quote(TENANT_ID, { items: baseOrder.items, couponCode: 'GONE' })).resolves.toMatchObject({
       couponError: 'Coupon usage limit reached',
+    });
+  });
+
+  /**
+   * Regression: redemption used to be a bare `usageCount: { increment: 1 }`
+   * after priceOrder's separate read-then-check, so two simultaneous orders
+   * against a coupon with one use left could both pass validation and both
+   * increment — over-issuing the discount. Redemption is now the same
+   * conditional-UPDATE pattern as reserveStock: a `count === 0` response
+   * (simulating a concurrent order winning the last slot) must reject this
+   * one instead of silently letting it through.
+   */
+  it('rejects order creation when the coupon is claimed by a concurrent request first', async () => {
+    const coupon = {
+      id: 'c1',
+      code: 'LASTONE',
+      discountType: 'PERCENTAGE',
+      discountValue: '10',
+      expiresAt: null,
+      usageLimit: 5,
+      usageCount: 4,
+    };
+    const double = createPrismaDouble({ coupon, couponUpdateCount: 0 });
+    const service = await buildService(double);
+
+    await expect(service.create(TENANT_ID, { ...baseOrder, couponCode: 'LASTONE' })).rejects.toThrow(ConflictException);
+    expect(double.db.order.create).not.toHaveBeenCalled();
+  });
+
+  it('redeems the coupon via a conditional update guarded by its own usage limit', async () => {
+    const coupon = {
+      id: 'c1',
+      code: 'SUMMER10',
+      discountType: 'PERCENTAGE',
+      discountValue: '10',
+      expiresAt: null,
+      usageLimit: 5,
+      usageCount: 4,
+    };
+    const double = createPrismaDouble({ coupon });
+    const service = await buildService(double);
+
+    await service.create(TENANT_ID, { ...baseOrder, couponCode: 'SUMMER10' });
+
+    expect(double.db.coupon.updateMany).toHaveBeenCalledWith({
+      where: { id: 'c1', OR: [{ usageLimit: null }, { usageCount: { lt: 5 } }] },
+      data: { usageCount: { increment: 1 } },
     });
   });
 
@@ -463,6 +512,33 @@ describe('OrdersService cancellation', () => {
     await service.updateStatus(TENANT_ID, 'order-1', 'COMPLETED');
 
     expect(double.stockUpdates).toHaveLength(0);
+  });
+
+  /**
+   * Regression: the old guard only checked the order's *current* status, so
+   * a cancelled order reactivated to CONFIRMED (no stock re-reserved — there
+   * was nothing stopping that move) and cancelled a second time released the
+   * same stock twice. Blocking every move out of CANCELLED, not just a
+   * second CANCELLED call, closes it at the reactivation step.
+   */
+  it('refuses to reactivate a cancelled order back into an active status', async () => {
+    const double = createPrismaDouble({
+      tenant: { tracksInventory: true },
+      order: { ...cancellable, status: 'CANCELLED' },
+    });
+    const service = await buildService(double);
+
+    await expect(service.updateStatus(TENANT_ID, 'order-1', 'CONFIRMED')).rejects.toThrow(ConflictException);
+    expect(double.db.order.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses to move a refunded order to any other status', async () => {
+    const double = createPrismaDouble({
+      order: { id: 'order-1', status: 'REFUNDED', paymentStatus: 'REFUNDED', items: [] },
+    });
+    const service = await buildService(double);
+
+    await expect(service.updateStatus(TENANT_ID, 'order-1', 'COMPLETED')).rejects.toThrow(ConflictException);
   });
 });
 

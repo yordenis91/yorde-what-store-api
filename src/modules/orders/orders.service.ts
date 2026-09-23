@@ -17,6 +17,21 @@ import { PaymentsService } from '../payments/payments.service';
 
 const ORDER_INCLUDE = { items: true, coupon: true, shipping: true };
 
+type OrderStatusValue = 'PENDING' | 'CONFIRMED' | 'PROCESSING' | 'COMPLETED' | 'CANCELLED' | 'REFUNDED';
+
+/**
+ * CANCELLED releases stock; REFUNDED returns the customer's money. Neither
+ * is something a later status change should be able to walk back — without
+ * this, cancelling (releases stock) → reactivating to an active status (no
+ * stock re-reserved, since nothing blocked the move) → cancelling again
+ * released the same stock a second time. The old guard only checked whether
+ * the order was *currently* CANCELLED, not whether leaving CANCELLED for
+ * something else made sense at all. The only "transition" left from either
+ * terminal status is the same status again — an idempotent retry of the
+ * same call, never a route back into an active state.
+ */
+const TERMINAL_ORDER_STATUSES: OrderStatusValue[] = ['CANCELLED', 'REFUNDED'];
+
 /** The parts of a priced line that stock handling needs. */
 interface PricedLine {
   product: { id: string; name: string; quantity: number };
@@ -49,6 +64,7 @@ export class OrdersService {
     // in one transaction, so a rejection here rolls back any stock already
     // taken by earlier lines of the same order.
     if (tenant.tracksInventory) await this.reserveStock(pricedLines);
+    if (coupon) await this.redeemCoupon(coupon);
 
     const orderNumber = this.generateOrderNumber();
 
@@ -91,10 +107,6 @@ export class OrdersService {
       },
       include: ORDER_INCLUDE,
     });
-
-    if (coupon) {
-      await this.prisma.db.coupon.update({ where: { id: coupon.id }, data: { usageCount: { increment: 1 } } });
-    }
 
     // Additional to whatever fulfillment channel below — WhatsApp/Telegram already
     // notify the tenant, but an email gives the customer their own paper trail
@@ -240,6 +252,24 @@ export class OrdersService {
         const label = variant ? `${product.name} (${variant.name})` : product.name;
         throw new ConflictException(available > 0 ? `Only ${available} left of ${label}` : `${label} is out of stock`);
       }
+    }
+  }
+
+  /**
+   * Atomic like reserveStock, for the same reason: `priceOrder` only reads
+   * and checks `usageCount` against `usageLimit`, so a bare `increment`
+   * afterward let two simultaneous redemptions of a coupon with one use
+   * left both pass validation and both increment — over-issuing the
+   * discount. The conditional UPDATE only succeeds while a slot is still
+   * actually available; a row that no longer satisfies it updates nothing.
+   */
+  private async redeemCoupon(coupon: { id: string; code: string; usageLimit: number | null }) {
+    const taken = await this.prisma.db.coupon.updateMany({
+      where: { id: coupon.id, OR: [{ usageLimit: null }, { usageCount: { lt: coupon.usageLimit ?? 0 } }] },
+      data: { usageCount: { increment: 1 } },
+    });
+    if (taken.count === 0) {
+      throw new ConflictException(`Coupon ${coupon.code} usage limit reached`);
     }
   }
 
@@ -462,6 +492,10 @@ export class OrdersService {
 
   async updateStatus(tenantId: string, id: string, status: string) {
     const order = await this.findOne(tenantId, id);
+
+    if (TERMINAL_ORDER_STATUSES.includes(order.status as OrderStatusValue) && status !== order.status) {
+      throw new ConflictException(`Order is already ${order.status} and cannot move to ${status}`);
+    }
 
     // Cancelling frees what the order took. Guarded on the current status so
     // cancelling an already-cancelled order doesn't credit the stock twice.
