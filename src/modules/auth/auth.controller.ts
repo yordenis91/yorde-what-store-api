@@ -1,12 +1,16 @@
 import { BadRequestException, Body, Controller, Get, Post, Req, Res, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 import { Public, CurrentUser, AuthenticatedUser } from '../../common/decorators';
 import { AuthService, TokenPair } from './auth.service';
 import { RegisterDto, LoginDto, VerifyTwoFactorDto, EnableTwoFactorDto, SwitchTenantDto } from './dto';
 
 const REFRESH_COOKIE = 'refresh_token';
+
+/** Tighter than the global 120/min — these guard credential/OTP brute force, not general API abuse. */
+const AUTH_THROTTLE = { default: { limit: 5, ttl: 60_000 } };
 
 @ApiTags('auth')
 @Controller('auth')
@@ -17,6 +21,7 @@ export class AuthController {
   ) {}
 
   @Public()
+  @Throttle(AUTH_THROTTLE)
   @Post('register')
   async register(@Body() dto: RegisterDto, @Res({ passthrough: true }) res: Response) {
     const { refreshToken, ...rest } = await this.authService.register(dto);
@@ -25,6 +30,7 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle(AUTH_THROTTLE)
   @Post('login')
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
     const result = await this.authService.login(dto);
@@ -36,6 +42,7 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle(AUTH_THROTTLE)
   @Post('2fa/verify')
   async verifyTwoFactor(@Body() dto: VerifyTwoFactorDto, @Res({ passthrough: true }) res: Response) {
     const { refreshToken, ...rest } = await this.authService.verifyTwoFactor(dto.challengeToken, dto.code);

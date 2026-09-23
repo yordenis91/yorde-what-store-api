@@ -1,6 +1,7 @@
 import { BadRequestException, Body, Controller, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
+import { Throttle } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 import { CurrentTenantId, Public } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
@@ -10,6 +11,9 @@ import { CustomersAuthService, CustomerTokenPair } from './customers-auth.servic
 import { ForgotPasswordCustomerDto, LoginCustomerDto, RegisterCustomerDto, ResetPasswordCustomerDto } from './dto';
 
 const REFRESH_COOKIE = 'customer_refresh_token';
+
+/** Tighter than the global 120/min — these guard credential brute force and the forgot-password email-enumeration oracle. */
+const AUTH_THROTTLE = { default: { limit: 5, ttl: 60_000 } };
 
 @ApiTags('storefront-customer-auth')
 @Public()
@@ -21,6 +25,7 @@ export class CustomersAuthController {
     private readonly config: ConfigService,
   ) {}
 
+  @Throttle(AUTH_THROTTLE)
   @Post('register')
   async register(
     @CurrentTenantId() tenantId: string,
@@ -32,6 +37,7 @@ export class CustomersAuthController {
     return rest;
   }
 
+  @Throttle(AUTH_THROTTLE)
   @Post('login')
   async login(
     @CurrentTenantId() tenantId: string,
@@ -66,12 +72,14 @@ export class CustomersAuthController {
     return result;
   }
 
+  @Throttle(AUTH_THROTTLE)
   @Post('forgot-password')
   forgotPassword(@CurrentTenantId() tenantId: string, @Body() dto: ForgotPasswordCustomerDto, @Req() req: Request) {
     const origin = req.headers.origin ?? (req.headers.referer ? new URL(req.headers.referer).origin : undefined);
     return this.authService.forgotPassword(tenantId, dto, origin);
   }
 
+  @Throttle(AUTH_THROTTLE)
   @Post('reset-password')
   resetPassword(@CurrentTenantId() tenantId: string, @Body() dto: ResetPasswordCustomerDto) {
     return this.authService.resetPassword(tenantId, dto);
