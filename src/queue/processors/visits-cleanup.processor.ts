@@ -1,7 +1,9 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
+import { Job } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
 import { VISITS_CLEANUP_QUEUE } from '../queue.constants';
+import { logQueueFailure } from '../queue-failure-logger';
 
 const RETENTION_DAYS = 60;
 
@@ -20,5 +22,10 @@ export class VisitsCleanupProcessor extends WorkerHost {
       tx.visit.deleteMany({ where: { createdAt: { lt: cutoff } } }),
     );
     if (count > 0) this.logger.log(`Deleted ${count} visit(s) older than ${RETENTION_DAYS} days`);
+  }
+
+  @OnWorkerEvent('failed')
+  onFailed(job: Job | undefined) {
+    logQueueFailure(this.logger, 'Visits cleanup', job);
   }
 }

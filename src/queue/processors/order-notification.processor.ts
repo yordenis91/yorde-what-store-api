@@ -1,8 +1,9 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ORDER_NOTIFICATION_QUEUE } from '../queue.constants';
+import { logQueueFailure } from '../queue-failure-logger';
 
 interface TelegramMessageJob {
   tenantId: string;
@@ -39,5 +40,10 @@ export class OrderNotificationProcessor extends WorkerHost {
       const body = await response.text();
       throw new Error(`Telegram sendMessage failed: ${response.status} ${body}`);
     }
+  }
+
+  @OnWorkerEvent('failed')
+  onFailed(job: Job | undefined) {
+    logQueueFailure(this.logger, 'Order notification', job);
   }
 }

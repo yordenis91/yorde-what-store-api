@@ -1,8 +1,9 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
 import { INVENTORY_SYNC_QUEUE } from '../queue.constants';
+import { logQueueFailure } from '../queue-failure-logger';
 
 interface DecrementStockJob {
   tenantId: string;
@@ -38,5 +39,10 @@ export class InventorySyncProcessor extends WorkerHost {
     });
 
     this.logger.log(`Inventory synced for tenant ${tenantId} (${lines.length} lines)`);
+  }
+
+  @OnWorkerEvent('failed')
+  onFailed(job: Job | undefined) {
+    logQueueFailure(this.logger, 'Inventory sync', job);
   }
 }

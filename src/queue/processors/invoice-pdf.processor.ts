@@ -1,12 +1,13 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import PDFDocument from 'pdfkit';
 import sharp from 'sharp';
 import { PrismaService } from '../../prisma/prisma.service';
 import { INVOICE_PDF_QUEUE } from '../queue.constants';
+import { logQueueFailure } from '../queue-failure-logger';
 import { getInvoicePath, resolveLocalUploadPath } from './invoice-storage.util';
 
 @Processor(INVOICE_PDF_QUEUE)
@@ -32,6 +33,11 @@ export class InvoicePdfProcessor extends WorkerHost {
       await writeFile(path, buffer);
       this.logger.log(`Generated invoice for order ${order.orderNumber} (${buffer.length} bytes)`);
     });
+  }
+
+  @OnWorkerEvent('failed')
+  onFailed(job: Job | undefined) {
+    logQueueFailure(this.logger, 'Invoice PDF', job);
   }
 
   /**

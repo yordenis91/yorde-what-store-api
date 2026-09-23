@@ -3,6 +3,7 @@ import { Response } from 'express';
 import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
 import { Logger } from 'winston';
 import { Prisma } from '@prisma/client';
+import { captureException } from '../../sentry';
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
@@ -14,6 +15,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const request = ctx.getRequest();
 
     const { status, message, code } = this.resolve(exception);
+
+    // Only unexpected server-side failures — a validation 400 or a 404 is
+    // normal traffic, not something anyone needs paged for.
+    if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
+      captureException(exception, { path: request?.url, method: request?.method, tenantId: request?.tenantId });
+    }
 
     // A dependency being unreachable is not "a bug" — logging it under the
     // same event name as every application error is what made a Postgres

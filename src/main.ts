@@ -9,8 +9,14 @@ import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import type { NextFunction, Request, Response } from 'express';
 import { AppModule } from './app.module';
+import { initSentry } from './sentry';
 
 async function bootstrap() {
+  // Before the Nest app exists, so a crash during module setup itself
+  // (validateEnv aside — that one is meant to be loud on stdout, not routed
+  // through Sentry) is still captured if it happens after this line.
+  initSentry();
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
     rawBody: true,
