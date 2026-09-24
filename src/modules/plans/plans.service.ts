@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreatePlanDto, UpdatePlanDto } from './dto';
 
@@ -32,6 +32,8 @@ export class PlansService {
   async subscribe(tenantId: string, planId: string) {
     const plan = await this.prisma.plan.findFirst({ where: { id: planId, isActive: true } });
     if (!plan) throw new NotFoundException('Plan not found');
+
+    await this.assertUnderNewProductLimit(tenantId, plan.maxProducts);
 
     const expiresAt = this.computeExpiry(plan.duration);
     const existing = await this.prisma.subscription.findFirst({
@@ -105,6 +107,26 @@ export class PlansService {
         expiresAt: this.computeExpiry(plan.duration),
       },
     });
+  }
+
+  /**
+   * Without this, a tenant on Business (unlimited) with 500 products could
+   * switch to Free (max 20) and keep all 500 active and visible
+   * indefinitely — the limit only ever blocked the *next* product creation,
+   * never reconciled what already existed. Blocking the downgrade outright
+   * (rather than silently deactivating the excess) leaves the choice of
+   * what to keep to the merchant, not to whatever order Prisma happens to
+   * return rows in.
+   */
+  private async assertUnderNewProductLimit(tenantId: string, maxProducts: number) {
+    if (maxProducts === -1) return;
+
+    const currentCount = await this.prisma.db.product.count({ where: { tenantId } });
+    if (currentCount > maxProducts) {
+      throw new ConflictException(
+        `This store has ${currentCount} products, over the ${maxProducts} allowed by this plan. Deactivate or delete products before switching.`,
+      );
+    }
   }
 
   private computeExpiry(duration: string): Date | null {
