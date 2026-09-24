@@ -32,4 +32,11 @@ describe('Health check (e2e)', () => {
     const res = await request(app.getHttpServer()).get('/api/v1/health');
     expect(res.status).not.toBe(401);
   });
+
+  it('health/strict also reports 200 when both dependencies are healthy', async () => {
+    const res = await request(app.getHttpServer()).get('/api/v1/health/strict');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ status: 'ok' });
+  });
 });

@@ -17,7 +17,8 @@ dominios y el orden de despliegue) está en el `DEPLOY.md` del repositorio
 ## Requisitos del servicio
 
 **Puerto:** `3000`
-**Healthcheck:** `GET /api/v1/health`
+**Healthcheck (contenedor):** `GET /api/v1/health` — siempre responde 200; un reinicio falso por un blip pasajero de Redis/Postgres es peor que quedarse arriba con el cuerpo marcando `degraded` por unos segundos.
+**Monitoreo externo:** `GET /api/v1/health/strict` — mismos checks, pero responde 503 si algo está `degraded`. Para un uptime monitor que solo mira el status code, nunca para el healthcheck del propio contenedor.
 **Build:** Dockerfile
 
 ### Volumen persistente (obligatorio)
