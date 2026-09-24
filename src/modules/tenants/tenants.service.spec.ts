@@ -1,25 +1,31 @@
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
+import { deleteUploadedFile } from '../uploads/uploads.util';
 import { TenantsService } from './tenants.service';
+
+jest.mock('../uploads/uploads.util', () => ({ deleteUploadedFile: jest.fn() }));
 
 const TENANT_ID = 'tenant-1';
 const ENCRYPTION_KEY = 'test-encryption-key';
 
-function buildService(options: { existingTenant?: Record<string, unknown> } = {}) {
+function buildService(
+  options: { existingTenant?: Record<string, unknown>; imageFields?: Record<string, unknown> } = {},
+) {
   const update = jest
     .fn()
     .mockImplementation(({ data }) => Promise.resolve({ id: TENANT_ID, smtpPassword: null, ...data }));
   const findUnique = jest.fn().mockResolvedValue(options.existingTenant ?? null);
+  const dbFindUnique = jest.fn().mockResolvedValue(options.imageFields ?? null);
 
   const prisma = {
-    db: { tenant: { update } },
+    db: { tenant: { update, findUnique: dbFindUnique } },
     tenant: { findUnique },
   } as unknown as PrismaService;
 
   const config = { get: () => ENCRYPTION_KEY } as unknown as ConfigService;
 
   const service = new TenantsService(prisma, config);
-  return { service, update, findUnique };
+  return { service, update, findUnique, dbFindUnique };
 }
 
 describe('TenantsService.update — SMTP password handling', () => {
@@ -53,6 +59,53 @@ describe('TenantsService.update — SMTP password handling', () => {
     await service.update(TENANT_ID, { smtpPassword: '' });
 
     expect(update.mock.calls[0][0].data.smtpPassword).toBeNull();
+  });
+});
+
+describe('TenantsService.update — stale image cleanup', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('deletes the old logo file when logoUrl is replaced', async () => {
+    const { service } = buildService({
+      imageFields: { logoUrl: '/uploads/tenant-1/old-logo.webp', bannerUrl: null, invoiceLogoUrl: null },
+    });
+
+    await service.update(TENANT_ID, { logoUrl: '/uploads/tenant-1/new-logo.webp' });
+
+    expect(deleteUploadedFile).toHaveBeenCalledWith('/uploads/tenant-1/old-logo.webp');
+    expect(deleteUploadedFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('deletes the old file when an image field is cleared to null', async () => {
+    const { service } = buildService({
+      imageFields: { logoUrl: null, bannerUrl: '/uploads/tenant-1/old-banner.webp', invoiceLogoUrl: null },
+    });
+
+    await service.update(TENANT_ID, { bannerUrl: undefined as unknown as string });
+    expect(deleteUploadedFile).not.toHaveBeenCalled();
+
+    await service.update(TENANT_ID, { bannerUrl: null as unknown as string });
+    expect(deleteUploadedFile).toHaveBeenCalledWith('/uploads/tenant-1/old-banner.webp');
+  });
+
+  it('does not touch disk when the field is left out of the update entirely', async () => {
+    const { service } = buildService({
+      imageFields: { logoUrl: '/uploads/tenant-1/logo.webp', bannerUrl: null, invoiceLogoUrl: null },
+    });
+
+    await service.update(TENANT_ID, { name: 'New store name' });
+
+    expect(deleteUploadedFile).not.toHaveBeenCalled();
+  });
+
+  it('does not delete anything when the new value is the same as the old one', async () => {
+    const { service } = buildService({
+      imageFields: { logoUrl: '/uploads/tenant-1/same.webp', bannerUrl: null, invoiceLogoUrl: null },
+    });
+
+    await service.update(TENANT_ID, { logoUrl: '/uploads/tenant-1/same.webp' });
+
+    expect(deleteUploadedFile).not.toHaveBeenCalled();
   });
 });
 

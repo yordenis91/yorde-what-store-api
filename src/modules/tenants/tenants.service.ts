@@ -9,7 +9,10 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { decryptSecret, encryptSecret } from '../../common/utils/crypto.util';
 import { maskSmtpPassword } from '../../common/utils/mask-tenant-secrets.util';
+import { deleteUploadedFile } from '../uploads/uploads.util';
 import { CreateTenantDto, UpdateTenantDto, UpsertPaymentSettingDto } from './dto';
+
+const IMAGE_FIELDS = ['logoUrl', 'bannerUrl', 'invoiceLogoUrl'] as const;
 
 @Injectable()
 export class TenantsService {
@@ -97,7 +100,20 @@ export class TenantsService {
       const secret = this.config.get<string>('security.encryptionKey')!;
       data.smtpPassword = smtpPassword === '' ? null : encryptSecret(smtpPassword, secret);
     }
+    const previous = await this.prisma.db.tenant.findUnique({
+      where: { id: tenantId },
+      select: { logoUrl: true, bannerUrl: true, invoiceLogoUrl: true },
+    });
     const tenant = await this.prisma.db.tenant.update({ where: { id: tenantId }, data: data as any });
+
+    // Replacing (or clearing) a stored image leaves the old file on disk
+    // forever unless we clean it up here — nothing else ever will.
+    for (const field of IMAGE_FIELDS) {
+      if (dto[field] !== undefined && previous?.[field] && previous[field] !== dto[field]) {
+        await deleteUploadedFile(previous[field]);
+      }
+    }
+
     return maskSmtpPassword(tenant);
   }
 

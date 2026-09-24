@@ -4,6 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PaginatedResult } from '../../common/dto/pagination.dto';
 import { CategoryTemplatesService } from '../category-templates/category-templates.service';
 import { PlansService } from '../plans/plans.service';
+import { deleteUploadedFile } from '../uploads/uploads.util';
 import {
   CreateProductDto,
   UpdateProductDto,
@@ -54,6 +55,13 @@ export class ProductsService {
 
   /** Mirrors the maxStores check in TenantsService.createAdditional — same fallback shape (Free plan's own limit) for a tenant with no subscription row at all. -1 means unlimited (Business plan). */
   private async assertUnderProductLimit(tenantId: string) {
+    // Serializes concurrent creates for this tenant: the lock is scoped to
+    // the request's own transaction (TenantScopeInterceptor's) and
+    // auto-releases at commit/rollback, so a second near-simultaneous create
+    // blocks here until the first one's count+insert has fully landed,
+    // instead of both reading the same pre-insert count.
+    await this.prisma.db.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${tenantId}))`;
+
     const subscription = await this.plansService.currentSubscription(tenantId);
     const maxProducts = subscription?.plan.maxProducts ?? 20;
     if (maxProducts === -1) return;
@@ -188,7 +196,10 @@ export class ProductsService {
 
   async removeImage(tenantId: string, productId: string, imageId: string) {
     await this.findOne(tenantId, productId);
+    const image = await this.prisma.db.productImage.findFirst({ where: { id: imageId, productId } });
+    if (!image) throw new NotFoundException('Image not found');
     await this.prisma.db.productImage.delete({ where: { id: imageId } });
+    await deleteUploadedFile(image.url);
     return { deleted: true };
   }
 

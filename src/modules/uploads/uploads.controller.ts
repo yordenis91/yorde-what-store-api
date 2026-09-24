@@ -27,6 +27,22 @@ const ALLOWED_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'im
 // output written to disk ends up nowhere near this, see resizeToWebp below.
 const MAX_UPLOAD_SIZE_BYTES = 15 * 1024 * 1024;
 
+// The client-supplied Content-Type is trivially spoofable, so it's not
+// really a content check — this looks at the actual bytes instead. sharp
+// would reject a non-image buffer too, but only after attempting a full
+// decode; this rejects an obviously mislabeled file immediately.
+const MAGIC_BYTE_CHECKS: ((buf: Buffer) => boolean)[] = [
+  (b) => b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff, // JPEG
+  (b) => b.length >= 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), // PNG
+  (b) => b.length >= 6 && b.subarray(0, 3).toString('ascii') === 'GIF' && (b[4] === 0x37 || b[4] === 0x39), // GIF87a/89a
+  (b) =>
+    b.length >= 12 && b.subarray(0, 4).toString('ascii') === 'RIFF' && b.subarray(8, 12).toString('ascii') === 'WEBP',
+];
+
+export function hasValidImageSignature(buffer: Buffer): boolean {
+  return MAGIC_BYTE_CHECKS.some((check) => check(buffer));
+}
+
 // A product photo shot on a phone is routinely 3000-4000px on a side and
 // several MB — nobody views it larger than the product page, and the
 // storefront grid shows it much smaller than that. Re-encoding to WebP at a
@@ -82,6 +98,9 @@ export class UploadsController {
   )
   async uploadImage(@UploadedFile() file: Express.Multer.File, @Body() dto: UploadImageDto, @Req() req: TenantRequest) {
     if (!file) throw new BadRequestException('No file uploaded');
+    if (!hasValidImageSignature(file.buffer)) {
+      throw new BadRequestException('This file does not look like a real JPEG, PNG, WEBP or GIF image');
+    }
 
     const tenantId = req.tenantId!;
     const dir = join(UPLOADS_ROOT, tenantId);

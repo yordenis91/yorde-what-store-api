@@ -1,6 +1,6 @@
 import sharp from 'sharp';
 import { BadRequestException } from '@nestjs/common';
-import { LOGO_MAX_DIMENSION_PX, MAX_DIMENSION_PX, resizeToWebp } from './uploads.controller';
+import { LOGO_MAX_DIMENSION_PX, MAX_DIMENSION_PX, hasValidImageSignature, resizeToWebp } from './uploads.controller';
 
 async function solidColorImage(width: number, height: number, format: 'jpeg' | 'png' = 'jpeg') {
   const image = sharp({
@@ -59,5 +59,34 @@ describe('resizeToWebp', () => {
   it('rejects data that is not a real image', async () => {
     const garbage = Buffer.from('this is not an image, just text pretending to be one');
     await expect(resizeToWebp(garbage)).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+describe('hasValidImageSignature', () => {
+  it('accepts a real JPEG, PNG, GIF and WEBP by their magic bytes', async () => {
+    const jpeg = await solidColorImage(20, 20, 'jpeg');
+    const png = await solidColorImage(20, 20, 'png');
+    const gif = Buffer.concat([Buffer.from('GIF89a', 'ascii'), Buffer.alloc(10)]);
+    const webp = Buffer.concat([
+      Buffer.from('RIFF', 'ascii'),
+      Buffer.alloc(4),
+      Buffer.from('WEBP', 'ascii'),
+      Buffer.alloc(4),
+    ]);
+
+    expect(hasValidImageSignature(jpeg)).toBe(true);
+    expect(hasValidImageSignature(png)).toBe(true);
+    expect(hasValidImageSignature(gif)).toBe(true);
+    expect(hasValidImageSignature(webp)).toBe(true);
+  });
+
+  it('rejects a text file with a spoofed image/jpeg content-type', () => {
+    const fakeJpeg = Buffer.from('<script>alert(1)</script>', 'ascii');
+    expect(hasValidImageSignature(fakeJpeg)).toBe(false);
+  });
+
+  it('rejects an empty or truncated buffer', () => {
+    expect(hasValidImageSignature(Buffer.alloc(0))).toBe(false);
+    expect(hasValidImageSignature(Buffer.from([0xff]))).toBe(false);
   });
 });
