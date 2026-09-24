@@ -236,6 +236,15 @@ export class ProductsService {
     return this.prisma.db.productCategory.findMany({ where: { tenantId }, orderBy: { name: 'asc' } });
   }
 
+  /** Every URL a crawler should see for this store's catalog — same publish/active filter as findPublished, just id + updatedAt. */
+  async listPublishedForSitemap(tenantId: string): Promise<{ id: string; updatedAt: Date }[]> {
+    return this.prisma.db.product.findMany({
+      where: { tenantId, isActive: true, isPublished: true },
+      select: { id: true, updatedAt: true },
+      orderBy: { updatedAt: 'desc' },
+    });
+  }
+
   async createCategory(tenantId: string, dto: CreateCategoryDto) {
     return this.prisma.db.productCategory.create({ data: { tenantId, ...dto } });
   }

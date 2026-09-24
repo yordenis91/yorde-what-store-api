@@ -1,10 +1,25 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards, UseInterceptors } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  Res,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import type { Request, Response } from 'express';
 import { CurrentTenantId, Public, Roles } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
 import { Audit } from '../audit/decorators/audit.decorator';
 import { AuditInterceptor } from '../audit/interceptors/audit.interceptor';
 import { ProductsService } from './products.service';
+import { buildSitemapXml } from './sitemap.util';
 import {
   CreateProductDto,
   UpdateProductDto,
@@ -44,6 +59,35 @@ export class StorefrontCategoriesController {
   @Get()
   list(@CurrentTenantId() tenantId: string) {
     return this.productsService.listCategories(tenantId);
+  }
+}
+
+@ApiTags('storefront-sitemap')
+@Public()
+@UseGuards(TenantRequiredGuard)
+@Controller('storefront')
+export class StorefrontSitemapController {
+  constructor(private readonly productsService: ProductsService) {}
+
+  /**
+   * Reads the origin from the request itself (X-Forwarded-Proto/Host, which
+   * nginx sets on every proxied request — see nginx.conf) rather than a
+   * hardcoded platform domain, so the URLs listed are the ones a visitor to
+   * *this* store's own subdomain would actually land on. Scoped to
+   * subdomain-mode deployments on purpose: the /store/:slug path-fallback
+   * mode has no single host that identifies one tenant, so a shared
+   * sitemap.xml can't represent it without a sitemap index — out of scope
+   * for what this endpoint needs to cover.
+   */
+  @Get('sitemap.xml')
+  async sitemap(@CurrentTenantId() tenantId: string, @Req() req: Request, @Res() res: Response) {
+    const products = await this.productsService.listPublishedForSitemap(tenantId);
+    const proto = req.headers['x-forwarded-proto']?.toString().split(',')[0] ?? req.protocol;
+    const host = req.headers['x-forwarded-host']?.toString().split(',')[0] ?? req.get('host');
+    const xml = buildSitemapXml(`${proto}://${host}`, products);
+
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.send(xml);
   }
 }
 

@@ -6,12 +6,18 @@ import {
   ProductsController,
   StorefrontProductsController,
   StorefrontCategoriesController,
+  StorefrontSitemapController,
 } from './products.controller';
 import { ProductsService } from './products.service';
 
 @Module({
   imports: [CategoryTemplatesModule, PlansModule, AuditModule],
-  controllers: [ProductsController, StorefrontProductsController, StorefrontCategoriesController],
+  controllers: [
+    ProductsController,
+    StorefrontProductsController,
+    StorefrontCategoriesController,
+    StorefrontSitemapController,
+  ],
   providers: [ProductsService],
   exports: [ProductsService],
 })
