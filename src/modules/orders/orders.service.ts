@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
+import { Prisma } from '@prisma/client';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PaginatedResult } from '../../common/dto/pagination.dto';
@@ -178,8 +179,8 @@ export class OrdersService {
       return { product, variant, priced };
     });
 
-    const subtotal = round2(pricedLines.reduce((sum, l) => sum + l.priced.lineSubtotal, 0));
-    const taxTotal = round2(pricedLines.reduce((sum, l) => sum + l.priced.taxAmount, 0));
+    const subtotal = round2(pricedLines.reduce((sum, l) => sum.plus(l.priced.lineSubtotal), new Prisma.Decimal(0)));
+    const taxTotal = round2(pricedLines.reduce((sum, l) => sum.plus(l.priced.taxAmount), new Prisma.Decimal(0)));
 
     let coupon: Awaited<ReturnType<typeof this.prisma.db.coupon.findFirst>> = null;
     let discountTotal = 0;
@@ -215,7 +216,7 @@ export class OrdersService {
       shippingTotal = Number(shipping.cost);
     }
 
-    const grandTotal = round2(subtotal + taxTotal - discountTotal + shippingTotal);
+    const grandTotal = round2(new Prisma.Decimal(subtotal).plus(taxTotal).minus(discountTotal).plus(shippingTotal));
 
     return {
       pricedLines,

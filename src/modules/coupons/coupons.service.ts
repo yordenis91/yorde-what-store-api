@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PaginatedResult, PaginationDto } from '../../common/dto/pagination.dto';
 import { applyCouponDiscount, round2 } from '../orders/pricing.util';
@@ -84,7 +85,7 @@ export class CouponsService {
       discountType: coupon.discountType,
       discountValue: Number(coupon.discountValue),
       discountAmount: discount,
-      total: round2(subtotal - discount),
+      total: round2(new Prisma.Decimal(subtotal).minus(discount)),
     };
   }
 }

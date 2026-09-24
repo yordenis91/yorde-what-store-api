@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { applyCouponDiscount, priceLineItem, round2 } from './pricing.util';
 
 describe('round2', () => {
@@ -8,14 +9,18 @@ describe('round2', () => {
   });
 
   /**
-   * Documents a known limit rather than asserting a fix. `Math.round(v * 100)`
-   * inherits binary floating point: 1.005 * 100 is 100.49999999999999, so an
-   * exact half-cent rounds down. Amounts here come from prices with at most two
-   * decimals, so exact half-cents are not reachable in practice — but if money
-   * handling ever moves to integer cents, this expectation should flip.
+   * Regression: `Math.round(v * 100)` inherited binary floating point —
+   * 1.005 * 100 is actually 100.49999999999999, so an exact half-cent used
+   * to round down instead of up. round2() now goes through Prisma.Decimal
+   * (decimal.js), which parses 1.005 as exactly that, not the nearest
+   * double, so the half-cent rounds the way a human expects.
    */
-  it('rounds an exact half-cent down, a floating-point artefact', () => {
-    expect(round2(1.005)).toBe(1);
+  it('rounds an exact half-cent up, unlike plain floating-point Math.round', () => {
+    expect(round2(1.005)).toBe(1.01);
+  });
+
+  it('accepts a Prisma.Decimal directly, for callers doing chained arithmetic', () => {
+    expect(round2(new Prisma.Decimal('1.006'))).toBe(1.01);
   });
 });
 
@@ -49,6 +54,18 @@ describe('priceLineItem', () => {
     ]);
     expect(line.taxAmount).toBe(22.5);
     expect(line.lineTotal).toBe(122.5);
+  });
+
+  /**
+   * Regression: with the old `(rate / 100) * lineSubtotal` in plain JS
+   * floats, a $1 item × 2 at a real 7.25% tax rate (common in US states)
+   * computed 2 × 0.0725 = 0.145 as 0.14499999999999999 internally, an exact
+   * half-cent that rounded down instead of up — an invisible one-cent
+   * shortfall on a routine order, not a contrived edge case.
+   */
+  it('rounds an exact half-cent tax up, at a real-world price and rate', () => {
+    const line = priceLineItem(1, 2, [{ name: 'Sales tax', rate: 7.25 }]);
+    expect(line.taxAmount).toBe(0.15);
   });
 
   it('rounds each tax before summing, so the total matches the breakdown shown to the customer', () => {
