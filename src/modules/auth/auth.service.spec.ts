@@ -10,6 +10,8 @@ function buildService(overrides: {
   storedRefreshToken?: Record<string, unknown> | null;
   updateImpl?: () => Promise<unknown>;
   findUserImpl?: () => Promise<unknown>;
+  /** Rows tenantMember.findFirst should "see" — switchTenant tests filter this by the where clause it's called with. */
+  memberships?: Record<string, unknown>[];
 }) {
   const findFirst = jest
     .fn()
@@ -22,9 +24,21 @@ function buildService(overrides: {
   const create = jest.fn().mockResolvedValue({});
   const findUniqueOrThrow = jest.fn(overrides.findUserImpl ?? (() => Promise.resolve(USER)));
 
+  const memberships = overrides.memberships ?? [];
+  const membershipFindFirst = jest
+    .fn()
+    .mockImplementation(({ where }: { where: { userId: string; tenantId: string; isActive: boolean } }) =>
+      Promise.resolve(
+        memberships.find(
+          (m) => m.userId === where.userId && m.tenantId === where.tenantId && m.isActive === where.isActive,
+        ) ?? null,
+      ),
+    );
+
   const prisma = {
     refreshToken: { findFirst, update, create },
     user: { findUniqueOrThrow },
+    tenantMember: { findFirst: membershipFindFirst },
   } as unknown as PrismaService;
 
   const jwt = {
@@ -44,6 +58,7 @@ function buildService(overrides: {
     service: new AuthService(prisma, jwt, config),
     update,
     findUniqueOrThrow,
+    membershipFindFirst,
     jwtVerify: jwt.verify as jest.Mock,
   };
 }
@@ -84,5 +99,51 @@ describe('AuthService.refresh', () => {
       findUserImpl: () => Promise.reject(Object.assign(new Error('No User found'), { code: 'P2025' })),
     });
     await expect(service.refresh('token')).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+});
+
+/**
+ * TenantMember carries no RLS backstop (app-level filtering only, by
+ * design). switchTenant is the one place a user-supplied tenantId decides
+ * which tenant's data a freshly-issued token can read — a future change
+ * that dropped either half of the `{ userId, tenantId }` pair here would
+ * let an authenticated user switch into a tenant they don't belong to.
+ */
+describe('AuthService.switchTenant', () => {
+  it('issues a token for the requested tenant when the user is an active member of it', async () => {
+    const { service, membershipFindFirst } = buildService({
+      memberships: [{ userId: USER.id, tenantId: 'tenant-a', isActive: true, role: 'OWNER' }],
+    });
+
+    const tokens = await service.switchTenant(USER.id, 'tenant-a');
+
+    expect(tokens).toEqual({ accessToken: 'signed.jwt.token', refreshToken: 'signed.jwt.token' });
+    expect(membershipFindFirst).toHaveBeenCalledWith({
+      where: { userId: USER.id, tenantId: 'tenant-a', isActive: true },
+    });
+  });
+
+  it('refuses to switch into a tenant the user is not a member of', async () => {
+    const { service } = buildService({
+      memberships: [{ userId: USER.id, tenantId: 'tenant-a', isActive: true, role: 'OWNER' }],
+    });
+
+    await expect(service.switchTenant(USER.id, 'tenant-b')).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it("refuses to switch using another user's membership row, even for the same tenant", async () => {
+    const { service } = buildService({
+      memberships: [{ userId: 'someone-else', tenantId: 'tenant-a', isActive: true, role: 'OWNER' }],
+    });
+
+    await expect(service.switchTenant(USER.id, 'tenant-a')).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('refuses to switch into a tenant via a deactivated membership', async () => {
+    const { service } = buildService({
+      memberships: [{ userId: USER.id, tenantId: 'tenant-a', isActive: false, role: 'STAFF' }],
+    });
+
+    await expect(service.switchTenant(USER.id, 'tenant-a')).rejects.toBeInstanceOf(UnauthorizedException);
   });
 });

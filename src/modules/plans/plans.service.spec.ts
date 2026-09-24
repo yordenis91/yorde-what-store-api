@@ -23,7 +23,7 @@ function buildService(options: {
   } as unknown as PrismaService;
 
   const service = new PlansService(prisma);
-  return { service, update, create, productCount };
+  return { service, update, create, productCount, findFirstSubscription };
 }
 
 /**
@@ -79,5 +79,22 @@ describe('PlansService.subscribe', () => {
 
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'sub-existing' } }));
     expect(create).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Subscription carries no RLS backstop (app-level filtering only, by
+ * design — the Super Admin panel reads across tenants). currentSubscription
+ * is the one call site an ordinary tenant OWNER reaches directly
+ * (GET /plans/current/subscription) — a future edit that dropped tenantId
+ * from its `where` would let one tenant read another tenant's subscription.
+ */
+describe('PlansService.currentSubscription', () => {
+  it("queries only this tenant's subscription, never omitting the tenant filter", async () => {
+    const { service, findFirstSubscription } = buildService({ existingSubscription: { id: 'sub-1' } });
+
+    await service.currentSubscription(TENANT_ID);
+
+    expect(findFirstSubscription).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: TENANT_ID } }));
   });
 });
