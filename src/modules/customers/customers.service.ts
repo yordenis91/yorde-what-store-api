@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PaginatedResult } from '../../common/dto/pagination.dto';
 import { CustomerQueryDto, CustomerSegment } from './dto';
@@ -177,6 +178,41 @@ export class CustomersService {
       having: { id: { _count: range } },
     });
     return grouped.map((g) => g.customerId).filter((id): id is string => id != null);
+  }
+
+  /**
+   * The only self-service (or admin-assisted) data-deletion path in the
+   * platform for a Customer — everything else is the tenant-purge, which is
+   * a SUPER_ADMIN-only, whole-tenant operation. Scrubs the PII the Customer
+   * row and their own Orders carry directly (name/email/phone/address), but
+   * keeps the orders themselves and their financial totals: those are the
+   * Merchant's own accounting/tax records, not the customer's to erase.
+   * Also revokes any live refresh tokens so an anonymized account can't stay
+   * logged in.
+   */
+  async anonymize(tenantId: string, customerId: string) {
+    const customer = await this.prisma.db.customer.findFirst({ where: { id: customerId, tenantId } });
+    if (!customer) throw new NotFoundException('Customer not found');
+
+    await this.prisma.db.customer.update({
+      where: { id: customerId },
+      data: { name: 'Deleted customer', email: null, phone: null, passwordHash: null },
+    });
+    await this.prisma.db.order.updateMany({
+      where: { tenantId, customerId },
+      data: {
+        customerName: 'Deleted customer',
+        customerEmail: null,
+        customerPhone: null,
+        shippingAddress: Prisma.JsonNull,
+      },
+    });
+    await this.prisma.db.customerRefreshToken.updateMany({
+      where: { customerId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+
+    return { anonymized: true };
   }
 }
 

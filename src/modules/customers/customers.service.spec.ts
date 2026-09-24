@@ -23,6 +23,7 @@ function createPrismaDouble(options: {
         ),
       findMany: jest.fn().mockResolvedValue(options.customers ?? []),
       count: jest.fn().mockResolvedValue(options.customerCount ?? (options.customers ?? []).length),
+      update: jest.fn().mockResolvedValue({}),
     },
     order: {
       groupBy: jest.fn().mockImplementation((args: Record<string, unknown>) => {
@@ -32,6 +33,10 @@ function createPrismaDouble(options: {
         return Promise.resolve(options.orderGroups ?? []);
       }),
       findMany: jest.fn().mockResolvedValue(options.orders ?? []),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
+    customerRefreshToken: {
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
   };
 
@@ -181,5 +186,57 @@ describe('CustomersService admin detail', () => {
     const result = await service.findOne(TENANT_ID, 'c1');
 
     expect(result).toMatchObject({ totalOrders: 0, totalSpent: 0, lastOrderAt: null, segment: 'new' });
+  });
+});
+
+/**
+ * The only data-deletion path a customer (or a tenant admin on their
+ * behalf) has, short of a full tenant purge (SUPER_ADMIN-only). Scrubs PII,
+ * keeps the money: orders and their totals stay, since those are the
+ * Merchant's own accounting records, not the customer's to erase.
+ */
+describe('CustomersService.anonymize', () => {
+  it('scrubs the customer row: name, email, phone and password hash', async () => {
+    const double = createPrismaDouble({ customers: [{ id: 'c1', name: 'Ana', email: 'ana@example.com' }] });
+    const service = await buildService(double);
+
+    await service.anonymize(TENANT_ID, 'c1');
+
+    expect(double.db.customer.update).toHaveBeenCalledWith({
+      where: { id: 'c1' },
+      data: { name: 'Deleted customer', email: null, phone: null, passwordHash: null },
+    });
+  });
+
+  it('scrubs PII on every order the customer placed, keeping the rest', async () => {
+    const double = createPrismaDouble({ customers: [{ id: 'c1', name: 'Ana' }] });
+    const service = await buildService(double);
+
+    await service.anonymize(TENANT_ID, 'c1');
+
+    expect(double.db.order.updateMany).toHaveBeenCalledWith({
+      where: { tenantId: TENANT_ID, customerId: 'c1' },
+      data: expect.objectContaining({ customerName: 'Deleted customer', customerEmail: null, customerPhone: null }),
+    });
+  });
+
+  it('revokes any live refresh tokens so the account cannot stay logged in', async () => {
+    const double = createPrismaDouble({ customers: [{ id: 'c1', name: 'Ana' }] });
+    const service = await buildService(double);
+
+    await service.anonymize(TENANT_ID, 'c1');
+
+    expect(double.db.customerRefreshToken.updateMany).toHaveBeenCalledWith({
+      where: { customerId: 'c1', revokedAt: null },
+      data: { revokedAt: expect.any(Date) },
+    });
+  });
+
+  it('throws when the customer does not belong to this tenant', async () => {
+    const double = createPrismaDouble({ customers: [] });
+    const service = await buildService(double);
+
+    await expect(service.anonymize(TENANT_ID, 'missing')).rejects.toThrow(NotFoundException);
+    expect(double.db.customer.update).not.toHaveBeenCalled();
   });
 });
