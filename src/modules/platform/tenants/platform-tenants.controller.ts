@@ -111,6 +111,15 @@ export class PlatformTenantsController {
     return this.tenantsService.impersonate(id, dto, actor, { ip: req.ip, userAgent: req.headers['user-agent'] });
   }
 
+  @ApiOperation({ summary: "Send a password-reset link to the tenant owner's email (Super Admin support action)" })
+  @Audit({ action: 'tenant.owner-password-reset', entityType: 'Tenant' })
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post(':id/send-password-reset')
+  sendOwnerPasswordReset(@Param('id') id: string, @Req() req: Request) {
+    const origin = req.headers.origin ?? (req.headers.referer ? new URL(req.headers.referer).origin : undefined);
+    return this.tenantsService.sendOwnerPasswordReset(id, origin);
+  }
+
   @ApiOperation({ summary: "Paginated roster of a tenant's team members (owner + staff)" })
   @Get(':id/members')
   listMembers(@Param('id') id: string, @Query() query: PaginationDto) {

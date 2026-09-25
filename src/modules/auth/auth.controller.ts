@@ -5,7 +5,15 @@ import { Throttle } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 import { Public, CurrentUser, AuthenticatedUser } from '../../common/decorators';
 import { AuthService, TokenPair } from './auth.service';
-import { RegisterDto, LoginDto, VerifyTwoFactorDto, EnableTwoFactorDto, SwitchTenantDto } from './dto';
+import {
+  RegisterDto,
+  LoginDto,
+  VerifyTwoFactorDto,
+  EnableTwoFactorDto,
+  SwitchTenantDto,
+  ForgotPasswordDto,
+  ResetPasswordDto,
+} from './dto';
 
 const REFRESH_COOKIE = 'refresh_token';
 
@@ -48,6 +56,21 @@ export class AuthController {
     const { refreshToken, ...rest } = await this.authService.verifyTwoFactor(dto.challengeToken, dto.code);
     this.setRefreshCookie(res, refreshToken);
     return rest;
+  }
+
+  @Public()
+  @Throttle(AUTH_THROTTLE)
+  @Post('forgot-password')
+  forgotPassword(@Body() dto: ForgotPasswordDto, @Req() req: Request) {
+    const origin = req.headers.origin ?? (req.headers.referer ? new URL(req.headers.referer).origin : undefined);
+    return this.authService.forgotPassword(dto, origin);
+  }
+
+  @Public()
+  @Throttle(AUTH_THROTTLE)
+  @Post('reset-password')
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto);
   }
 
   @Public()

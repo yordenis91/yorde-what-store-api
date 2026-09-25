@@ -2,12 +2,17 @@ import { createHash } from 'node:crypto';
 import { BadRequestException, ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import * as bcrypt from 'bcrypt';
 import { authenticator } from 'otplib';
 import * as qrcode from 'qrcode';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EMAIL_JOB_OPTIONS, EMAIL_QUEUE } from '../../queue/queue.constants';
+import { EmailJobData } from '../../queue/processors/email.processor';
+import { hashResetToken, issuePasswordResetToken } from './password-reset.util';
 import { JwtPayload } from './strategies/jwt.strategy';
-import { RegisterDto, LoginDto, EnableTwoFactorDto } from './dto';
+import { RegisterDto, LoginDto, EnableTwoFactorDto, ForgotPasswordDto, ResetPasswordDto } from './dto';
 
 const BCRYPT_ROUNDS = 12;
 
@@ -22,6 +27,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    @InjectQueue(EMAIL_QUEUE) private readonly emailQueue: Queue,
   ) {}
 
   async register(dto: RegisterDto) {
@@ -200,6 +206,67 @@ export class AuthService {
       data: { twoFactorEnabled: false, totpSecret: null },
     });
     return { twoFactorEnabled: false };
+  }
+
+  /**
+   * Always returns the same shape whether or not the email exists, to avoid
+   * leaking which emails are registered — same reasoning as the customer
+   * equivalent (CustomersAuthService.forgotPassword). The email is sent
+   * "as" the user's oldest tenant membership (a User can own/staff more
+   * than one store), which only affects the store name/branding shown in
+   * the email and which tenant's SMTP config the queue worker tries first —
+   * the token itself authenticates the User, not any one tenant.
+   */
+  async forgotPassword(dto: ForgotPasswordDto, origin?: string) {
+    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    if (user?.isActive) {
+      const membership = await this.prisma.tenantMember.findFirst({
+        where: { userId: user.id },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (membership) {
+        const tenant = await this.prisma.tenant.findUniqueOrThrow({
+          where: { id: membership.tenantId },
+          select: { id: true, name: true, locale: true },
+        });
+        const rawToken = await issuePasswordResetToken(this.prisma, user.id);
+        await this.emailQueue.add(
+          'password-reset',
+          {
+            templateKey: 'password-reset',
+            tenantId: tenant.id,
+            locale: tenant.locale,
+            to: user.email,
+            variables: {
+              name: user.name,
+              store_name: tenant.name,
+              reset_link: `${origin ?? ''}/login?token=${rawToken}`,
+            },
+          } satisfies EmailJobData,
+          EMAIL_JOB_OPTIONS,
+        );
+      }
+    }
+
+    return { sent: true };
+  }
+
+  async resetPassword(dto: ResetPasswordDto) {
+    const tokenHash = hashResetToken(dto.token);
+    const resetToken = await this.prisma.passwordResetToken.findFirst({ where: { tokenHash, usedAt: null } });
+    if (!resetToken || resetToken.expiresAt < new Date()) {
+      throw new UnauthorizedException('Reset link is invalid or expired');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
+    await this.prisma.user.update({ where: { id: resetToken.userId }, data: { passwordHash } });
+    await this.prisma.passwordResetToken.update({ where: { id: resetToken.id }, data: { usedAt: new Date() } });
+    await this.prisma.refreshToken.updateMany({
+      where: { userId: resetToken.userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+
+    return { reset: true };
   }
 
   private async issueTokenPair(

@@ -85,7 +85,11 @@ function buildService(overrides: { tenant?: Record<string, unknown> | null } = {
   const jwt = { sign: jest.fn().mockReturnValue('signed.jwt.token') } as unknown as JwtService;
   const config = { get: () => 'secret' } as unknown as ConfigService;
 
-  const service = new PlatformTenantsService(prisma, jwt, config);
+  const resetTokenCreate = jest.fn().mockResolvedValue({});
+  (prisma as any).passwordResetToken = { create: resetTokenCreate };
+  const emailQueue = { add: jest.fn().mockResolvedValue({}) };
+
+  const service = new PlatformTenantsService(prisma, jwt, config, emailQueue as any);
   return {
     service,
     tenantFindUnique,
@@ -100,6 +104,8 @@ function buildService(overrides: { tenant?: Record<string, unknown> | null } = {
     memberFindMany,
     rlsTenantDelete,
     jwt,
+    resetTokenCreate,
+    emailQueue,
   };
 }
 
@@ -256,6 +262,46 @@ describe('PlatformTenantsService.impersonate', () => {
     const { service } = buildService({ tenant: null });
 
     await expect(service.impersonate(TENANT_ID, {}, ACTOR)).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('PlatformTenantsService.sendOwnerPasswordReset', () => {
+  it("queues a password-reset email to the tenant owner's address", async () => {
+    const { service, resetTokenCreate, emailQueue } = buildService({
+      tenant: {
+        id: TENANT_ID,
+        name: 'Acme',
+        locale: 'en',
+        deletedAt: null,
+        owner: { id: 'owner-1', email: 'owner@acme.com', name: 'Owner' },
+      },
+    });
+
+    const result = await service.sendOwnerPasswordReset(TENANT_ID, 'https://admin.example.com');
+
+    expect(result).toEqual({ sent: true });
+    expect(resetTokenCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ userId: 'owner-1' }) }),
+    );
+    expect(emailQueue.add).toHaveBeenCalledWith(
+      'password-reset',
+      expect.objectContaining({
+        templateKey: 'password-reset',
+        tenantId: TENANT_ID,
+        to: 'owner@acme.com',
+        variables: expect.objectContaining({
+          store_name: 'Acme',
+          reset_link: expect.stringContaining('https://admin.example.com/login?token='),
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('rejects a tenant that does not exist', async () => {
+    const { service } = buildService({ tenant: null });
+
+    await expect(service.sendOwnerPasswordReset(TENANT_ID)).rejects.toBeInstanceOf(NotFoundException);
   });
 });
 

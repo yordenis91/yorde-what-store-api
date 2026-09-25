@@ -1,6 +1,8 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { Prisma, TenantStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { rm } from 'node:fs/promises';
@@ -10,6 +12,9 @@ import { PaginatedResult, PaginationDto } from '../../../common/dto/pagination.d
 import { AuthenticatedUser } from '../../../common/decorators';
 import { maskSmtpPassword } from '../../../common/utils/mask-tenant-secrets.util';
 import { JwtPayload } from '../../auth/strategies/jwt.strategy';
+import { issuePasswordResetToken } from '../../auth/password-reset.util';
+import { EMAIL_JOB_OPTIONS, EMAIL_QUEUE } from '../../../queue/queue.constants';
+import { EmailJobData } from '../../../queue/processors/email.processor';
 import { UPLOADS_ROOT } from '../../uploads/uploads.controller';
 import { INVOICES_ROOT } from '../../../queue/processors/invoice-storage.util';
 import {
@@ -50,6 +55,7 @@ export class PlatformTenantsService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    @InjectQueue(EMAIL_QUEUE) private readonly emailQueue: Queue,
   ) {}
 
   /**
@@ -378,6 +384,34 @@ export class PlatformTenantsService {
     });
 
     return { accessToken, expiresAt, tenantId: tenant.id, tenantName: tenant.name };
+  }
+
+  /**
+   * Support action for when a tenant owner is locked out and can't reach
+   * their own forgot-password (e.g. the email on file bounces and they need
+   * a Super Admin to confirm/trigger it). Sends the same reset-link email
+   * self-service would, via the same token machinery — the Super Admin
+   * never sees or sets the new password themselves.
+   */
+  async sendOwnerPasswordReset(id: string, origin?: string) {
+    const tenant = await this.findActiveOrThrow(id, { owner: { select: { id: true, email: true, name: true } } });
+    const rawToken = await issuePasswordResetToken(this.prisma, tenant.owner.id);
+    await this.emailQueue.add(
+      'password-reset',
+      {
+        templateKey: 'password-reset',
+        tenantId: id,
+        locale: tenant.locale,
+        to: tenant.owner.email,
+        variables: {
+          name: tenant.owner.name,
+          store_name: tenant.name,
+          reset_link: `${origin ?? ''}/login?token=${rawToken}`,
+        },
+      } satisfies EmailJobData,
+      EMAIL_JOB_OPTIONS,
+    );
+    return { sent: true };
   }
 
   private async getDefaultPlanId(): Promise<string> {

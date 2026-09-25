@@ -1,5 +1,7 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
+import { Request } from 'express';
 import { CurrentTenantId, Roles } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
 import { Audit } from '../audit/decorators/audit.decorator';
@@ -36,5 +38,13 @@ export class UsersController {
   @Delete(':id')
   removeMember(@CurrentTenantId() tenantId: string, @Param('id') id: string) {
     return this.usersService.removeMember(tenantId, id);
+  }
+
+  @Audit({ action: 'staff.password-reset', entityType: 'TenantMember' })
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post(':id/reset-password')
+  resetMemberPassword(@CurrentTenantId() tenantId: string, @Param('id') id: string, @Req() req: Request) {
+    const origin = req.headers.origin ?? (req.headers.referer ? new URL(req.headers.referer).origin : undefined);
+    return this.usersService.resetMemberPassword(tenantId, id, origin);
   }
 }

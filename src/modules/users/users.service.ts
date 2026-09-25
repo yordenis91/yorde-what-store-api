@@ -5,6 +5,7 @@ import { EMAIL_JOB_OPTIONS, EMAIL_QUEUE } from '../../queue/queue.constants';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { EmailJobData } from '../../queue/processors/email.processor';
+import { issuePasswordResetToken } from '../auth/password-reset.util';
 import { InviteStaffDto, UpdateMemberDto } from './dto';
 
 const BCRYPT_ROUNDS = 12;
@@ -75,5 +76,43 @@ export class UsersService {
 
     await this.prisma.tenantMember.update({ where: { id: memberId }, data: { isActive: false } });
     return { removed: true };
+  }
+
+  /**
+   * Lets an OWNER send a staff member a reset link instead of the only prior
+   * option (delete + re-invite with a brand new plaintext temp password).
+   * Reuses the same token/email machinery as the self-service forgot-password
+   * flow (AuthService.forgotPassword) — see password-reset.util.ts.
+   */
+  async resetMemberPassword(tenantId: string, memberId: string, origin?: string) {
+    const member = await this.prisma.tenantMember.findFirst({
+      where: { id: memberId, tenantId },
+      include: { user: true },
+    });
+    if (!member) throw new NotFoundException('Member not found');
+    if (member.role === 'OWNER') throw new ConflictException("Cannot reset the store owner's password this way");
+
+    const tenant = await this.prisma.db.tenant.findUniqueOrThrow({
+      where: { id: tenantId },
+      select: { name: true, locale: true },
+    });
+    const rawToken = await issuePasswordResetToken(this.prisma, member.userId);
+    await this.emailQueue.add(
+      'password-reset',
+      {
+        templateKey: 'password-reset',
+        tenantId,
+        locale: tenant.locale,
+        to: member.user.email,
+        variables: {
+          name: member.user.name,
+          store_name: tenant.name,
+          reset_link: `${origin ?? ''}/login?token=${rawToken}`,
+        },
+      } satisfies EmailJobData,
+      EMAIL_JOB_OPTIONS,
+    );
+
+    return { sent: true };
   }
 }

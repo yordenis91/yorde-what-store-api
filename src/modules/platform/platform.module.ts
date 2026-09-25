@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
+import { BullModule } from '@nestjs/bullmq';
 import { AuthModule } from '../auth/auth.module';
 import { AuditModule } from '../audit/audit.module';
 import { PlatformSettingsModule } from '../platform-settings/platform-settings.module';
+import { EMAIL_QUEUE } from '../../queue/queue.constants';
 import { PlatformController } from './platform.controller';
 import { PlatformService } from './platform.service';
 import { PlatformTenantsController } from './tenants/platform-tenants.controller';
@@ -19,7 +21,9 @@ import { PlatformProductsService } from './products/platform-products.service';
   // module is enough to activate those routes; they don't need re-declaring
   // here too. Same story for PlatformSettingsModule and /platform/settings —
   // also used directly by PlatformService for the commission-rate default.
-  imports: [AuthModule, AuditModule, PlatformSettingsModule],
+  // BullModule registers the email queue so PlatformTenantsService can send
+  // the owner password-reset email (sendOwnerPasswordReset).
+  imports: [AuthModule, AuditModule, PlatformSettingsModule, BullModule.registerQueue({ name: EMAIL_QUEUE })],
   controllers: [PlatformController, PlatformTenantsController, PlatformProductsController],
   providers: [PlatformService, PlatformTenantsService, PlatformProductsService],
 })
