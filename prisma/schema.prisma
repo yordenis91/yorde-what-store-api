@@ -79,6 +79,11 @@ enum PaymentProvider {
   MERCADOPAGO
 }
 
+enum DevicePlatform {
+  IOS
+  ANDROID
+}
+
 // ---------------------------------------------------------------------------
 // Identity & Access
 // ---------------------------------------------------------------------------
@@ -100,6 +105,7 @@ model User {
   memberships         TenantMember[]
   refreshTokens       RefreshToken[]
   mobileRefreshTokens MobileRefreshToken[]
+  deviceTokens        DeviceToken[]
   passwordResets      PasswordResetToken[]
   ownedTenants        Tenant[]             @relation("TenantOwner")
 
@@ -155,6 +161,32 @@ model MobileRefreshToken {
   @@index([userId])
   @@index([familyId])
   @@map("mobile_refresh_tokens")
+}
+
+/// A staff user's push-notification target: one row per (user, device),
+/// re-registering the same deviceId updates it in place (Expo push tokens
+/// rotate; the app calls POST /devices again whenever it gets a new one, or
+/// after switching its active tenant). No RLS, same reasoning as
+/// MobileRefreshToken — staff Users aren't tenant-partitioned data, access is
+/// scoped by userId in application code. `tenantId` says which tenant's
+/// order/push events this device currently wants; a staff member watching
+/// more than one store needs one row per store, not one shared row.
+model DeviceToken {
+  id         String         @id @default(uuid()) @db.Uuid
+  userId     String         @map("user_id") @db.Uuid
+  tenantId   String         @map("tenant_id") @db.Uuid
+  token      String
+  platform   DevicePlatform
+  deviceId   String         @map("device_id")
+  lastSeenAt DateTime       @default(now()) @map("last_seen_at")
+  revokedAt  DateTime?      @map("revoked_at")
+  createdAt  DateTime       @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, deviceId])
+  @@index([tenantId])
+  @@map("device_tokens")
 }
 
 model PasswordResetToken {
@@ -474,7 +506,7 @@ model AuditLog {
 /// secrets, payment gateway keys) deliberately stay env-only.
 model PlatformSettings {
   id                    String   @id @default("singleton")
-  defaultCommissionRate Decimal  @default(5) @db.Decimal(5, 2) @map("default_commission_rate")
+  defaultCommissionRate Decimal  @default(5) @map("default_commission_rate") @db.Decimal(5, 2)
   smtpEnabled           Boolean  @default(false) @map("smtp_enabled")
   smtpHost              String?  @map("smtp_host")
   smtpPort              Int?     @map("smtp_port")
