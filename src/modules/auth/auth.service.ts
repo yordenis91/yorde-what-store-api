@@ -44,15 +44,47 @@ export class AuthService {
     @InjectQueue(EMAIL_QUEUE) private readonly emailQueue: Queue,
   ) {}
 
+  /**
+   * The Prisma client to issue a query through — the ambient tenant-scoped
+   * transaction client if `TenantScopeInterceptor` opened one for this
+   * request (recomputed on every access via AsyncLocalStorage, since this
+   * service is a singleton shared across requests), else the plain
+   * `PrismaService`. None of `/auth/*`'s data is tenant-scoped, but a real
+   * staff client attaches `X-Tenant-ID` on every request once a tenant is
+   * active — including these — so the request often ends up wrapped in that
+   * transaction anyway. A second, unrelated query against the raw client at
+   * that point would need a connection of its own, and under the test
+   * suite's `connection_limit=1` (and, far more slowly, under a saturated
+   * production pool) that's a self-inflicted wait for a connection this same
+   * request is already holding. Routing every query through whichever client
+   * is actually live keeps the whole request on one connection either way.
+   * See respondMobileRefresh's doc comment for the sibling bug this pattern
+   * was written to fix (mobileRefresh, in this same file).
+   */
+  private get client(): ReturnType<typeof getScopedClient> {
+    return getScopedClient(this.prisma);
+  }
+
   async register(dto: RegisterDto) {
-    const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    const existing = await this.client.user.findUnique({ where: { email: dto.email } });
     if (existing) throw new ConflictException('Email already registered');
 
-    const slugTaken = await this.prisma.tenant.findUnique({ where: { slug: dto.storeSlug } });
+    const slugTaken = await this.client.tenant.findUnique({ where: { slug: dto.storeSlug } });
     if (slugTaken) throw new ConflictException('Store slug already taken');
 
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
 
+    // Deliberately still `this.prisma.$transaction` (not `this.client`): this
+    // needs its OWN atomic unit for the 4 writes below regardless of whether
+    // an ambient scope exists. If a caller ever attaches X-Tenant-ID to a
+    // register request (no known client does today — there's no tenant to
+    // attach before the first login), this would open a second transaction
+    // while the first already holds the pool's only connection, and it
+    // would hang the same way mobileRefresh's bug did. Not fixed here:
+    // doing so safely means conditionally reusing the ambient transaction
+    // instead of opening a nested one, which is a bigger, structural change
+    // affecting how every $transaction call in the app would need to work,
+    // not a one-line swap like the rest of this file.
     const { user, tenant } = await this.prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: { email: dto.email, passwordHash, name: dto.name },
@@ -86,7 +118,7 @@ export class AuthService {
   }
 
   async login(dto: LoginDto) {
-    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    const user = await this.client.user.findUnique({ where: { email: dto.email } });
     if (!user || !user.isActive) throw new UnauthorizedException('Invalid credentials');
 
     const valid = await bcrypt.compare(dto.password, user.passwordHash);
@@ -112,7 +144,7 @@ export class AuthService {
     }
     if (payload.purpose !== '2fa') throw new UnauthorizedException('Invalid challenge token');
 
-    const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
+    const user = await this.client.user.findUnique({ where: { id: payload.sub } });
     if (!user?.totpSecret) throw new UnauthorizedException('2FA not configured');
 
     const valid = authenticator.check(code, user.totpSecret);
@@ -122,8 +154,8 @@ export class AuthService {
   }
 
   private async completeLogin(userId: string, deviceId?: string) {
-    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
-    const membership = await this.prisma.tenantMember.findFirst({
+    const user = await this.client.user.findUniqueOrThrow({ where: { id: userId } });
+    const membership = await this.client.tenantMember.findFirst({
       where: { userId, isActive: true },
       orderBy: { createdAt: 'asc' },
     });
@@ -141,12 +173,12 @@ export class AuthService {
   }
 
   async switchTenant(userId: string, tenantId: string, deviceId?: string) {
-    const membership = await this.prisma.tenantMember.findFirst({
+    const membership = await this.client.tenantMember.findFirst({
       where: { userId, tenantId, isActive: true },
     });
     if (!membership) throw new UnauthorizedException('Not a member of this tenant');
 
-    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const user = await this.client.user.findUniqueOrThrow({ where: { id: userId } });
     const tokens = await this.issueTokenPair(user.id, user.email, user.globalRole, tenantId, membership.role);
     const mobileRefreshToken = deviceId
       ? await this.issueFreshMobileRefreshToken(user.id, deviceId, tenantId, membership.role)
@@ -174,22 +206,12 @@ export class AuthService {
    * active, on every request including this one).
    */
   async mobileRefresh(dto: MobileRefreshDto): Promise<MobileRefreshResult> {
-    // Not `this.prisma` directly: this endpoint has no tenant of its own, but
-    // the staff mobile client attaches X-Tenant-ID once one is active (same
-    // as the web client), so this request is often ALSO wrapped in
-    // TenantScopeInterceptor's per-tenant transaction, which checks out the
-    // pool's only connection for the request's duration. A second query
-    // through the raw `this.prisma` would need a connection of its own and,
-    // under the test suite's connection_limit=1, deadlock waiting for one
-    // this same request is holding. Reusing the ambient scoped client (when
-    // there is one) keeps every query on that one connection either way.
-    const client = getScopedClient(this.prisma);
     const tokenHash = this.hashToken(dto.refreshToken);
-    const stored = await client.mobileRefreshToken.findFirst({ where: { tokenHash } });
+    const stored = await this.client.mobileRefreshToken.findFirst({ where: { tokenHash } });
     if (!stored) return { ok: false };
 
     if (stored.revokedAt || stored.deviceId !== dto.deviceId) {
-      await client.mobileRefreshToken.updateMany({
+      await this.client.mobileRefreshToken.updateMany({
         where: { familyId: stored.familyId, revokedAt: null },
         data: { revokedAt: new Date() },
       });
@@ -199,15 +221,14 @@ export class AuthService {
       return { ok: false };
     }
 
-    const user = await client.user.findUnique({ where: { id: stored.userId } });
+    const user = await this.client.user.findUnique({ where: { id: stored.userId } });
     if (!user || !user.isActive) {
-      await client.mobileRefreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } });
+      await this.client.mobileRefreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } });
       return { ok: false };
     }
 
-    await client.mobileRefreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } });
+    await this.client.mobileRefreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } });
     const refreshToken = await this.createMobileRefreshToken(
-      client,
       stored.userId,
       stored.deviceId,
       stored.familyId,
@@ -233,7 +254,7 @@ export class AuthService {
     }
 
     const tokenHash = this.hashToken(rawRefreshToken);
-    const stored = await this.prisma.refreshToken.findFirst({
+    const stored = await this.client.refreshToken.findFirst({
       where: { userId: payload.sub, tokenHash, revokedAt: null },
     });
     if (!stored || stored.expiresAt < new Date()) {
@@ -245,8 +266,8 @@ export class AuthService {
     // issued, ...) must still fail closed as a 401 — a stale/broken session
     // should force a fresh login, never surface as a raw 500.
     try {
-      await this.prisma.refreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } });
-      const user = await this.prisma.user.findUniqueOrThrow({ where: { id: payload.sub } });
+      await this.client.refreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } });
+      const user = await this.client.user.findUniqueOrThrow({ where: { id: payload.sub } });
       return await this.issueTokenPair(user.id, user.email, user.globalRole, payload.tenantId, payload.tenantRole);
     } catch (err) {
       if (err instanceof UnauthorizedException) throw err;
@@ -257,7 +278,7 @@ export class AuthService {
   async logout(userId: string, rawRefreshToken?: string) {
     if (rawRefreshToken) {
       const tokenHash = this.hashToken(rawRefreshToken);
-      await this.prisma.refreshToken.updateMany({
+      await this.client.refreshToken.updateMany({
         where: { userId, tokenHash, revokedAt: null },
         data: { revokedAt: new Date() },
       });
@@ -266,36 +287,36 @@ export class AuthService {
   }
 
   async getProfile(userId: string) {
-    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const user = await this.client.user.findUniqueOrThrow({ where: { id: userId } });
     return this.sanitizeUser(user);
   }
 
   async setupTwoFactor(userId: string) {
-    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const user = await this.client.user.findUniqueOrThrow({ where: { id: userId } });
     const secret = authenticator.generateSecret();
     const issuer = this.config.get<string>('totp.issuer') ?? 'YWS';
     const otpauth = authenticator.keyuri(user.email, issuer, secret);
     const qrDataUrl = await qrcode.toDataURL(otpauth);
 
     // Stored only after a valid code confirms possession (see enableTwoFactor).
-    await this.prisma.user.update({ where: { id: userId }, data: { totpSecret: secret } });
+    await this.client.user.update({ where: { id: userId }, data: { totpSecret: secret } });
 
     return { secret, otpauthUrl: otpauth, qrDataUrl };
   }
 
   async enableTwoFactor(userId: string, dto: EnableTwoFactorDto) {
-    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const user = await this.client.user.findUniqueOrThrow({ where: { id: userId } });
     if (!user.totpSecret) throw new BadRequestException('Call /auth/2fa/setup first');
 
     const valid = authenticator.check(dto.code, user.totpSecret);
     if (!valid) throw new BadRequestException('Invalid 2FA code');
 
-    await this.prisma.user.update({ where: { id: userId }, data: { twoFactorEnabled: true } });
+    await this.client.user.update({ where: { id: userId }, data: { twoFactorEnabled: true } });
     return { twoFactorEnabled: true };
   }
 
   async disableTwoFactor(userId: string) {
-    await this.prisma.user.update({
+    await this.client.user.update({
       where: { id: userId },
       data: { twoFactorEnabled: false, totpSecret: null },
     });
@@ -312,18 +333,18 @@ export class AuthService {
    * the token itself authenticates the User, not any one tenant.
    */
   async forgotPassword(dto: ForgotPasswordDto, origin?: string) {
-    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    const user = await this.client.user.findUnique({ where: { email: dto.email } });
     if (user?.isActive) {
-      const membership = await this.prisma.tenantMember.findFirst({
+      const membership = await this.client.tenantMember.findFirst({
         where: { userId: user.id },
         orderBy: { createdAt: 'asc' },
       });
       if (membership) {
-        const tenant = await this.prisma.tenant.findUniqueOrThrow({
+        const tenant = await this.client.tenant.findUniqueOrThrow({
           where: { id: membership.tenantId },
           select: { id: true, name: true, locale: true },
         });
-        const rawToken = await issuePasswordResetToken(this.prisma, user.id);
+        const rawToken = await issuePasswordResetToken(this.client, user.id);
         await this.emailQueue.add(
           'password-reset',
           {
@@ -347,20 +368,20 @@ export class AuthService {
 
   async resetPassword(dto: ResetPasswordDto) {
     const tokenHash = hashResetToken(dto.token);
-    const resetToken = await this.prisma.passwordResetToken.findFirst({ where: { tokenHash, usedAt: null } });
+    const resetToken = await this.client.passwordResetToken.findFirst({ where: { tokenHash, usedAt: null } });
     if (!resetToken || resetToken.expiresAt < new Date()) {
       throw new UnauthorizedException('Reset link is invalid or expired');
     }
 
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
-    await this.prisma.user.update({ where: { id: resetToken.userId }, data: { passwordHash } });
-    await this.prisma.passwordResetToken.update({ where: { id: resetToken.id }, data: { usedAt: new Date() } });
-    await this.prisma.refreshToken.updateMany({
+    await this.client.user.update({ where: { id: resetToken.userId }, data: { passwordHash } });
+    await this.client.passwordResetToken.update({ where: { id: resetToken.id }, data: { usedAt: new Date() } });
+    await this.client.refreshToken.updateMany({
       where: { userId: resetToken.userId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
     // A password reset must end every session, not just the web one.
-    await this.prisma.mobileRefreshToken.updateMany({
+    await this.client.mobileRefreshToken.updateMany({
       where: { userId: resetToken.userId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
@@ -397,7 +418,7 @@ export class AuthService {
     });
 
     const decoded = this.jwt.decode(refreshToken) as { exp: number };
-    await this.prisma.refreshToken.create({
+    await this.client.refreshToken.create({
       data: {
         userId,
         tokenHash: this.hashToken(refreshToken),
@@ -413,8 +434,6 @@ export class AuthService {
    * first revoking whatever family was already active for it — logging in
    * again on the same device supersedes its previous session rather than
    * accumulating parallel live families for the same physical phone forever.
-   * Uses the ambient scoped client if there is one — see mobileRefresh's
-   * comment for why a second connection here can't be assumed safe.
    */
   private async issueFreshMobileRefreshToken(
     userId: string,
@@ -422,17 +441,15 @@ export class AuthService {
     tenantId?: string,
     tenantRole?: string,
   ): Promise<string> {
-    const client = getScopedClient(this.prisma);
-    await client.mobileRefreshToken.updateMany({
+    await this.client.mobileRefreshToken.updateMany({
       where: { userId, deviceId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
-    return this.createMobileRefreshToken(client, userId, deviceId, randomUUID(), tenantId, tenantRole);
+    return this.createMobileRefreshToken(userId, deviceId, randomUUID(), tenantId, tenantRole);
   }
 
   /** Inserts one MobileRefreshToken row and returns the raw (unhashed) token to hand back to the client. */
   private async createMobileRefreshToken(
-    client: ReturnType<typeof getScopedClient>,
     userId: string,
     deviceId: string,
     familyId: string,
@@ -441,7 +458,7 @@ export class AuthService {
   ): Promise<string> {
     const rawToken = randomBytes(32).toString('hex');
     const ttlDays = this.config.get<number>('mobileAuth.staffRefreshTtlDays') ?? 7;
-    await client.mobileRefreshToken.create({
+    await this.client.mobileRefreshToken.create({
       data: {
         userId,
         familyId,
