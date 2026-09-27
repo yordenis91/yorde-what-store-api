@@ -97,10 +97,11 @@ model User {
   createdAt        DateTime   @default(now()) @map("created_at")
   updatedAt        DateTime   @updatedAt @map("updated_at")
 
-  memberships    TenantMember[]
-  refreshTokens  RefreshToken[]
-  passwordResets PasswordResetToken[]
-  ownedTenants   Tenant[]             @relation("TenantOwner")
+  memberships         TenantMember[]
+  refreshTokens       RefreshToken[]
+  mobileRefreshTokens MobileRefreshToken[]
+  passwordResets      PasswordResetToken[]
+  ownedTenants        Tenant[]             @relation("TenantOwner")
 
   /// Platform-admin trails — populated only for SUPER_ADMIN users, who are the
   /// only ones with a route to write these.
@@ -123,6 +124,37 @@ model RefreshToken {
 
   @@index([userId])
   @@map("refresh_tokens")
+}
+
+/// Mobile-native counterpart to RefreshToken: an opaque (non-JWT) token, since
+/// the mobile client can only persist it via /auth/mobile/refresh, never via
+/// the httpOnly cookie the web login flow relies on. Fully separate table and
+/// endpoint from the web refresh flow above — additive, doesn't touch it.
+/// `tenantId`/`tenantRole` are carried forward from the access token that was
+/// live when this token was issued (mirrors how RefreshToken's web equivalent
+/// re-derives them from the old JWT's payload on each rotation, rather than a
+/// live membership lookup) so a rotation never needs to re-resolve them.
+/// `familyId` links every token descended from one login: reusing a token
+/// that's already been rotated away revokes every token sharing its
+/// `familyId`, forcing the whole lineage to re-authenticate — see
+/// AuthService.mobileRefresh.
+model MobileRefreshToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  familyId   String    @map("family_id") @db.Uuid
+  deviceId   String    @map("device_id")
+  tokenHash  String    @map("token_hash")
+  tenantId   String?   @map("tenant_id") @db.Uuid
+  tenantRole String?   @map("tenant_role")
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@map("mobile_refresh_tokens")
 }
 
 model PasswordResetToken {
@@ -168,10 +200,11 @@ model Customer {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  tenant         Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  orders         Order[]
-  refreshTokens  CustomerRefreshToken[]
-  passwordResets CustomerPasswordResetToken[]
+  tenant              Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orders              Order[]
+  refreshTokens       CustomerRefreshToken[]
+  mobileRefreshTokens MobileCustomerRefreshToken[]
+  passwordResets      CustomerPasswordResetToken[]
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -190,6 +223,28 @@ model CustomerRefreshToken {
 
   @@index([customerId])
   @@map("customer_refresh_tokens")
+}
+
+/// Mobile-native counterpart to CustomerRefreshToken — see MobileRefreshToken's
+/// doc comment for the rationale (opaque token, separate table, rotation +
+/// reuse-family invalidation). `tenantId` here is never null, unlike the
+/// staff version: a customer session is always scoped to exactly one tenant.
+model MobileCustomerRefreshToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  customerId String    @map("customer_id") @db.Uuid
+  familyId   String    @map("family_id") @db.Uuid
+  deviceId   String    @map("device_id")
+  tokenHash  String    @map("token_hash")
+  tenantId   String    @map("tenant_id") @db.Uuid
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@index([familyId])
+  @@map("mobile_customer_refresh_tokens")
 }
 
 model CustomerPasswordResetToken {

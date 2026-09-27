@@ -5,10 +5,17 @@ import { Throttle } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 import { CurrentTenantId, Public } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
+import { respondMobileRefresh } from '../../common/utils/mobile-refresh-response.util';
 import { CurrentCustomerId } from './decorators/current-customer-id.decorator';
 import { CustomerAuthGuard } from './guards/customer-auth.guard';
 import { CustomersAuthService, CustomerTokenPair } from './customers-auth.service';
-import { ForgotPasswordCustomerDto, LoginCustomerDto, RegisterCustomerDto, ResetPasswordCustomerDto } from './dto';
+import {
+  ForgotPasswordCustomerDto,
+  LoginCustomerDto,
+  RegisterCustomerDto,
+  ResetPasswordCustomerDto,
+  MobileRefreshCustomerDto,
+} from './dto';
 
 const REFRESH_COOKIE = 'customer_refresh_token';
 
@@ -57,6 +64,21 @@ export class CustomersAuthController {
     const tokens: CustomerTokenPair = await this.authService.refresh(token);
     this.setRefreshCookie(res, tokens.refreshToken);
     return { accessToken: tokens.accessToken };
+  }
+
+  /**
+   * Mobile-native counterpart to POST .../auth/refresh — see
+   * MobileRefreshDto's doc comment (auth module) for the rotation/reuse-family
+   * design shared by both realms. No cookie: the rotated refresh token comes
+   * back in the body for the client to store itself.
+   *
+   * Responds via `@Res()` by hand instead of the usual return/throw flow —
+   * see respondMobileRefresh's doc comment for why.
+   */
+  @Post('mobile/refresh')
+  async mobileRefresh(@Body() dto: MobileRefreshCustomerDto, @Req() req: Request, @Res() res: Response) {
+    const result = await this.authService.mobileRefresh(dto);
+    respondMobileRefresh(res, req, result);
   }
 
   @Post('logout')

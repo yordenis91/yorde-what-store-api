@@ -1,4 +1,4 @@
-import { IsEmail, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsEmail, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 
 export class RegisterDto {
   @IsEmail()
@@ -24,4 +24,10 @@ export class RegisterDto {
   @MinLength(2)
   @MaxLength(60)
   storeSlug: string;
+
+  /** Present only for a mobile client — see MobileRefreshDto's doc comment. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  deviceId?: string;
 }

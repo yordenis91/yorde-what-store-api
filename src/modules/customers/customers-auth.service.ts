@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
@@ -8,8 +8,15 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EMAIL_JOB_OPTIONS, EMAIL_QUEUE } from '../../queue/queue.constants';
 import { EmailJobData } from '../../queue/processors/email.processor';
+import { MobileRefreshResult } from '../../common/utils/mobile-refresh-response.util';
 import { CustomerJwtPayload } from './strategies/customer-jwt.strategy';
-import { ForgotPasswordCustomerDto, LoginCustomerDto, RegisterCustomerDto, ResetPasswordCustomerDto } from './dto';
+import {
+  ForgotPasswordCustomerDto,
+  LoginCustomerDto,
+  RegisterCustomerDto,
+  ResetPasswordCustomerDto,
+  MobileRefreshCustomerDto,
+} from './dto';
 
 const BCRYPT_ROUNDS = 12;
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1h
@@ -17,6 +24,11 @@ const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1h
 export interface CustomerTokenPair {
   accessToken: string;
   refreshToken: string;
+}
+
+export interface CustomerTokenPairWithMobile extends CustomerTokenPair {
+  /** Present only when the request carried a `deviceId` — see CustomersAuthService.issueFreshMobileRefreshToken. */
+  mobileRefreshToken?: string;
 }
 
 @Injectable()
@@ -40,7 +52,10 @@ export class CustomersAuthService {
     });
 
     const tokens = await this.issueTokenPair(customer.id, tenantId);
-    return { customer: this.sanitize(customer), ...tokens };
+    const mobileRefreshToken = dto.deviceId
+      ? await this.issueFreshMobileRefreshToken(customer.id, dto.deviceId, tenantId)
+      : undefined;
+    return { customer: this.sanitize(customer), ...tokens, ...(mobileRefreshToken && { mobileRefreshToken }) };
   }
 
   async login(tenantId: string, dto: LoginCustomerDto) {
@@ -53,7 +68,56 @@ export class CustomersAuthService {
     if (!valid) throw new UnauthorizedException('Invalid credentials');
 
     const tokens = await this.issueTokenPair(customer.id, tenantId);
-    return { customer: this.sanitize(customer), ...tokens };
+    const mobileRefreshToken = dto.deviceId
+      ? await this.issueFreshMobileRefreshToken(customer.id, dto.deviceId, tenantId)
+      : undefined;
+    return { customer: this.sanitize(customer), ...tokens, ...(mobileRefreshToken && { mobileRefreshToken }) };
+  }
+
+  /**
+   * Mobile-native counterpart to `refresh()` — see AuthService.mobileRefresh's
+   * doc comment for the rotation/reuse-family design, and
+   * respondMobileRefresh's doc comment for why this returns a discriminated
+   * result instead of throwing (this endpoint is always tenant-scoped, so
+   * throwing here would roll back the revocation write below).
+   */
+  async mobileRefresh(dto: MobileRefreshCustomerDto): Promise<MobileRefreshResult> {
+    const tokenHash = this.hashToken(dto.refreshToken);
+    const stored = await this.prisma.db.mobileCustomerRefreshToken.findFirst({ where: { tokenHash } });
+    if (!stored) return { ok: false };
+
+    if (stored.revokedAt || stored.deviceId !== dto.deviceId) {
+      await this.prisma.db.mobileCustomerRefreshToken.updateMany({
+        where: { familyId: stored.familyId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      return { ok: false };
+    }
+    if (stored.expiresAt < new Date()) {
+      return { ok: false };
+    }
+
+    const customer = await this.prisma.db.customer.findUnique({ where: { id: stored.customerId } });
+    if (!customer) {
+      await this.prisma.db.mobileCustomerRefreshToken.update({
+        where: { id: stored.id },
+        data: { revokedAt: new Date() },
+      });
+      return { ok: false };
+    }
+
+    await this.prisma.db.mobileCustomerRefreshToken.update({
+      where: { id: stored.id },
+      data: { revokedAt: new Date() },
+    });
+    const refreshToken = await this.createMobileRefreshToken(
+      stored.customerId,
+      stored.deviceId,
+      stored.familyId,
+      stored.tenantId,
+    );
+    const accessToken = this.signAccessToken(customer.id, stored.tenantId);
+    return { ok: true, accessToken, refreshToken };
   }
 
   async refresh(rawRefreshToken: string): Promise<CustomerTokenPair> {
@@ -157,17 +221,61 @@ export class CustomersAuthService {
       where: { customerId: customer.id, revokedAt: null },
       data: { revokedAt: new Date() },
     });
+    // A password reset must end every session, not just the web one.
+    await this.prisma.db.mobileCustomerRefreshToken.updateMany({
+      where: { customerId: customer.id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
 
     return { reset: true };
   }
 
-  private async issueTokenPair(customerId: string, tenantId: string): Promise<CustomerTokenPair> {
+  private signAccessToken(customerId: string, tenantId: string): string {
     const payload: CustomerJwtPayload = { sub: customerId, tenantId, type: 'customer' };
-
-    const accessToken = this.jwt.sign(payload, {
+    return this.jwt.sign(payload, {
       secret: this.config.get<string>('jwtCustomer.secret'),
       expiresIn: this.config.get<string>('jwtCustomer.expiresIn'),
     });
+  }
+
+  /**
+   * Starts a brand-new mobile refresh family for this (customer, device)
+   * pair, first revoking whatever family was already active for it — same
+   * "supersede, don't accumulate" rationale as AuthService's staff equivalent.
+   */
+  private async issueFreshMobileRefreshToken(customerId: string, deviceId: string, tenantId: string): Promise<string> {
+    await this.prisma.db.mobileCustomerRefreshToken.updateMany({
+      where: { customerId, deviceId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    return this.createMobileRefreshToken(customerId, deviceId, randomUUID(), tenantId);
+  }
+
+  /** Inserts one MobileCustomerRefreshToken row and returns the raw (unhashed) token to hand back to the client. */
+  private async createMobileRefreshToken(
+    customerId: string,
+    deviceId: string,
+    familyId: string,
+    tenantId: string,
+  ): Promise<string> {
+    const rawToken = randomBytes(32).toString('hex');
+    const ttlDays = this.config.get<number>('mobileAuth.customerRefreshTtlDays') ?? 30;
+    await this.prisma.db.mobileCustomerRefreshToken.create({
+      data: {
+        customerId,
+        familyId,
+        deviceId,
+        tokenHash: this.hashToken(rawToken),
+        tenantId,
+        expiresAt: new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000),
+      },
+    });
+    return rawToken;
+  }
+
+  private async issueTokenPair(customerId: string, tenantId: string): Promise<CustomerTokenPair> {
+    const accessToken = this.signAccessToken(customerId, tenantId);
+    const payload: CustomerJwtPayload = { sub: customerId, tenantId, type: 'customer' };
     const refreshToken = this.jwt.sign(payload, {
       secret: this.config.get<string>('jwtCustomer.refreshSecret'),
       expiresIn: this.config.get<string>('jwtCustomer.refreshExpiresIn'),

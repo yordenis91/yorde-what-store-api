@@ -5,3 +5,4 @@ export * from './enable-two-factor.dto';
 export * from './switch-tenant.dto';
 export * from './forgot-password.dto';
 export * from './reset-password.dto';
+export * from './mobile-refresh.dto';

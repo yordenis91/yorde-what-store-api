@@ -4,6 +4,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 import { Public, CurrentUser, AuthenticatedUser } from '../../common/decorators';
+import { respondMobileRefresh } from '../../common/utils/mobile-refresh-response.util';
 import { AuthService, TokenPair } from './auth.service';
 import {
   RegisterDto,
@@ -13,6 +14,7 @@ import {
   SwitchTenantDto,
   ForgotPasswordDto,
   ResetPasswordDto,
+  MobileRefreshDto,
 } from './dto';
 
 const REFRESH_COOKIE = 'refresh_token';
@@ -53,9 +55,28 @@ export class AuthController {
   @Throttle(AUTH_THROTTLE)
   @Post('2fa/verify')
   async verifyTwoFactor(@Body() dto: VerifyTwoFactorDto, @Res({ passthrough: true }) res: Response) {
-    const { refreshToken, ...rest } = await this.authService.verifyTwoFactor(dto.challengeToken, dto.code);
+    const { refreshToken, ...rest } = await this.authService.verifyTwoFactor(
+      dto.challengeToken,
+      dto.code,
+      dto.deviceId,
+    );
     this.setRefreshCookie(res, refreshToken);
     return rest;
+  }
+
+  /**
+   * Mobile-native counterpart to POST /auth/refresh — see MobileRefreshDto's
+   * doc comment. No cookie involved: the rotated refresh token is returned
+   * in the body for the client to store itself (expo-secure-store).
+   *
+   * Responds via `@Res()` by hand instead of the usual return/throw flow —
+   * see respondMobileRefresh's doc comment for why.
+   */
+  @Public()
+  @Post('mobile/refresh')
+  async mobileRefresh(@Body() dto: MobileRefreshDto, @Req() req: Request, @Res() res: Response) {
+    const result = await this.authService.mobileRefresh(dto);
+    respondMobileRefresh(res, req, result);
   }
 
   @Public()
@@ -103,7 +124,7 @@ export class AuthController {
     @Body() dto: SwitchTenantDto,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const { refreshToken, ...rest } = await this.authService.switchTenant(user.id, dto.tenantId);
+    const { refreshToken, ...rest } = await this.authService.switchTenant(user.id, dto.tenantId, dto.deviceId);
     this.setRefreshCookie(res, refreshToken);
     return rest;
   }

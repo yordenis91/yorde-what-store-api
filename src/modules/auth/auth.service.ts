@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { BadRequestException, ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
@@ -8,17 +8,31 @@ import * as bcrypt from 'bcrypt';
 import { authenticator } from 'otplib';
 import * as qrcode from 'qrcode';
 import { PrismaService } from '../../prisma/prisma.service';
+import { getScopedClient } from '../../prisma/tenant-context';
 import { EMAIL_JOB_OPTIONS, EMAIL_QUEUE } from '../../queue/queue.constants';
 import { EmailJobData } from '../../queue/processors/email.processor';
 import { hashResetToken, issuePasswordResetToken } from './password-reset.util';
+import { MobileRefreshResult } from '../../common/utils/mobile-refresh-response.util';
 import { JwtPayload } from './strategies/jwt.strategy';
-import { RegisterDto, LoginDto, EnableTwoFactorDto, ForgotPasswordDto, ResetPasswordDto } from './dto';
+import {
+  RegisterDto,
+  LoginDto,
+  EnableTwoFactorDto,
+  ForgotPasswordDto,
+  ResetPasswordDto,
+  MobileRefreshDto,
+} from './dto';
 
 const BCRYPT_ROUNDS = 12;
 
 export interface TokenPair {
   accessToken: string;
   refreshToken: string;
+}
+
+export interface TokenPairWithMobile extends TokenPair {
+  /** Present only when the request carried a `deviceId` — see AuthService.issueFreshMobileRefreshToken. */
+  mobileRefreshToken?: string;
 }
 
 @Injectable()
@@ -65,7 +79,10 @@ export class AuthService {
     });
 
     const tokens = await this.issueTokenPair(user.id, user.email, user.globalRole, tenant.id, 'OWNER');
-    return { user: this.sanitizeUser(user), tenant, ...tokens };
+    const mobileRefreshToken = dto.deviceId
+      ? await this.issueFreshMobileRefreshToken(user.id, dto.deviceId, tenant.id, 'OWNER')
+      : undefined;
+    return { user: this.sanitizeUser(user), tenant, ...tokens, ...(mobileRefreshToken && { mobileRefreshToken }) };
   }
 
   async login(dto: LoginDto) {
@@ -83,10 +100,10 @@ export class AuthService {
       return { requiresTwoFactor: true, challengeToken };
     }
 
-    return this.completeLogin(user.id);
+    return this.completeLogin(user.id, dto.deviceId);
   }
 
-  async verifyTwoFactor(challengeToken: string, code: string) {
+  async verifyTwoFactor(challengeToken: string, code: string, deviceId?: string) {
     let payload: { sub: string; purpose: string };
     try {
       payload = this.jwt.verify(challengeToken, { secret: this.config.get<string>('jwt.secret') });
@@ -101,10 +118,10 @@ export class AuthService {
     const valid = authenticator.check(code, user.totpSecret);
     if (!valid) throw new UnauthorizedException('Invalid 2FA code');
 
-    return this.completeLogin(user.id);
+    return this.completeLogin(user.id, deviceId);
   }
 
-  private async completeLogin(userId: string) {
+  private async completeLogin(userId: string, deviceId?: string) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
     const membership = await this.prisma.tenantMember.findFirst({
       where: { userId, isActive: true },
@@ -117,17 +134,94 @@ export class AuthService {
       membership?.tenantId,
       membership?.role,
     );
-    return { user: this.sanitizeUser(user), ...tokens };
+    const mobileRefreshToken = deviceId
+      ? await this.issueFreshMobileRefreshToken(user.id, deviceId, membership?.tenantId, membership?.role)
+      : undefined;
+    return { user: this.sanitizeUser(user), ...tokens, ...(mobileRefreshToken && { mobileRefreshToken }) };
   }
 
-  async switchTenant(userId: string, tenantId: string) {
+  async switchTenant(userId: string, tenantId: string, deviceId?: string) {
     const membership = await this.prisma.tenantMember.findFirst({
       where: { userId, tenantId, isActive: true },
     });
     if (!membership) throw new UnauthorizedException('Not a member of this tenant');
 
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
-    return this.issueTokenPair(user.id, user.email, user.globalRole, tenantId, membership.role);
+    const tokens = await this.issueTokenPair(user.id, user.email, user.globalRole, tenantId, membership.role);
+    const mobileRefreshToken = deviceId
+      ? await this.issueFreshMobileRefreshToken(user.id, deviceId, tenantId, membership.role)
+      : undefined;
+    return { ...tokens, ...(mobileRefreshToken && { mobileRefreshToken }) };
+  }
+
+  /**
+   * Mobile-native counterpart to `refresh()` above — rotates an opaque
+   * MobileRefreshToken instead of verifying a JWT against the httpOnly
+   * cookie. Looked up by hash WITHOUT filtering `revokedAt`, unlike
+   * `refresh()`'s query, specifically so an already-rotated-away token can be
+   * told apart from one that never existed: presenting it again means it
+   * leaked, so the fix is to burn every token descended from the same login
+   * (`familyId`), not just this one row, forcing a fresh login everywhere
+   * that lineage is still alive. A `deviceId` mismatch is treated the same
+   * way — a token straying to a different device than it was issued to is
+   * just as strong a signal that it leaked.
+   *
+   * Returns a discriminated result instead of throwing on failure — see
+   * respondMobileRefresh's doc comment for why a thrown exception here would
+   * silently roll back the very revocation this method just wrote, whenever
+   * the request happens to be tenant-scoped (which, for the staff mobile
+   * client, is effectively always: it attaches X-Tenant-ID once a tenant is
+   * active, on every request including this one).
+   */
+  async mobileRefresh(dto: MobileRefreshDto): Promise<MobileRefreshResult> {
+    // Not `this.prisma` directly: this endpoint has no tenant of its own, but
+    // the staff mobile client attaches X-Tenant-ID once one is active (same
+    // as the web client), so this request is often ALSO wrapped in
+    // TenantScopeInterceptor's per-tenant transaction, which checks out the
+    // pool's only connection for the request's duration. A second query
+    // through the raw `this.prisma` would need a connection of its own and,
+    // under the test suite's connection_limit=1, deadlock waiting for one
+    // this same request is holding. Reusing the ambient scoped client (when
+    // there is one) keeps every query on that one connection either way.
+    const client = getScopedClient(this.prisma);
+    const tokenHash = this.hashToken(dto.refreshToken);
+    const stored = await client.mobileRefreshToken.findFirst({ where: { tokenHash } });
+    if (!stored) return { ok: false };
+
+    if (stored.revokedAt || stored.deviceId !== dto.deviceId) {
+      await client.mobileRefreshToken.updateMany({
+        where: { familyId: stored.familyId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      return { ok: false };
+    }
+    if (stored.expiresAt < new Date()) {
+      return { ok: false };
+    }
+
+    const user = await client.user.findUnique({ where: { id: stored.userId } });
+    if (!user || !user.isActive) {
+      await client.mobileRefreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } });
+      return { ok: false };
+    }
+
+    await client.mobileRefreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } });
+    const refreshToken = await this.createMobileRefreshToken(
+      client,
+      stored.userId,
+      stored.deviceId,
+      stored.familyId,
+      stored.tenantId ?? undefined,
+      stored.tenantRole ?? undefined,
+    );
+    const accessToken = this.signAccessToken(
+      user.id,
+      user.email,
+      user.globalRole,
+      stored.tenantId ?? undefined,
+      stored.tenantRole ?? undefined,
+    );
+    return { ok: true, accessToken, refreshToken };
   }
 
   async refresh(rawRefreshToken: string): Promise<TokenPair> {
@@ -265,8 +359,27 @@ export class AuthService {
       where: { userId: resetToken.userId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
+    // A password reset must end every session, not just the web one.
+    await this.prisma.mobileRefreshToken.updateMany({
+      where: { userId: resetToken.userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
 
     return { reset: true };
+  }
+
+  private signAccessToken(
+    userId: string,
+    email: string,
+    globalRole: string,
+    tenantId?: string,
+    tenantRole?: string,
+  ): string {
+    const payload: JwtPayload = { sub: userId, email, globalRole, tenantId, tenantRole };
+    return this.jwt.sign(payload, {
+      secret: this.config.get<string>('jwt.secret'),
+      expiresIn: this.config.get<string>('jwt.expiresIn'),
+    });
   }
 
   private async issueTokenPair(
@@ -276,12 +389,8 @@ export class AuthService {
     tenantId?: string,
     tenantRole?: string,
   ): Promise<TokenPair> {
+    const accessToken = this.signAccessToken(userId, email, globalRole, tenantId, tenantRole);
     const payload: JwtPayload = { sub: userId, email, globalRole, tenantId, tenantRole };
-
-    const accessToken = this.jwt.sign(payload, {
-      secret: this.config.get<string>('jwt.secret'),
-      expiresIn: this.config.get<string>('jwt.expiresIn'),
-    });
     const refreshToken = this.jwt.sign(payload, {
       secret: this.config.get<string>('jwt.refreshSecret'),
       expiresIn: this.config.get<string>('jwt.refreshExpiresIn'),
@@ -297,6 +406,53 @@ export class AuthService {
     });
 
     return { accessToken, refreshToken };
+  }
+
+  /**
+   * Starts a brand-new mobile refresh family for this (user, device) pair,
+   * first revoking whatever family was already active for it — logging in
+   * again on the same device supersedes its previous session rather than
+   * accumulating parallel live families for the same physical phone forever.
+   * Uses the ambient scoped client if there is one — see mobileRefresh's
+   * comment for why a second connection here can't be assumed safe.
+   */
+  private async issueFreshMobileRefreshToken(
+    userId: string,
+    deviceId: string,
+    tenantId?: string,
+    tenantRole?: string,
+  ): Promise<string> {
+    const client = getScopedClient(this.prisma);
+    await client.mobileRefreshToken.updateMany({
+      where: { userId, deviceId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    return this.createMobileRefreshToken(client, userId, deviceId, randomUUID(), tenantId, tenantRole);
+  }
+
+  /** Inserts one MobileRefreshToken row and returns the raw (unhashed) token to hand back to the client. */
+  private async createMobileRefreshToken(
+    client: ReturnType<typeof getScopedClient>,
+    userId: string,
+    deviceId: string,
+    familyId: string,
+    tenantId?: string,
+    tenantRole?: string,
+  ): Promise<string> {
+    const rawToken = randomBytes(32).toString('hex');
+    const ttlDays = this.config.get<number>('mobileAuth.staffRefreshTtlDays') ?? 7;
+    await client.mobileRefreshToken.create({
+      data: {
+        userId,
+        familyId,
+        deviceId,
+        tokenHash: this.hashToken(rawToken),
+        tenantId,
+        tenantRole,
+        expiresAt: new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000),
+      },
+    });
+    return rawToken;
   }
 
   private hashToken(token: string): string {

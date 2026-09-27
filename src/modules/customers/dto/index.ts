@@ -3,3 +3,4 @@ export * from './login-customer.dto';
 export * from './forgot-password.dto';
 export * from './reset-password.dto';
 export * from './customer-query.dto';
+export * from './mobile-refresh-customer.dto';
