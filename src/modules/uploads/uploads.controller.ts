@@ -22,10 +22,10 @@ import { TenantRequest } from '../../common/middleware/tenant.middleware';
 import { UploadImageDto } from './dto/upload-image.dto';
 
 export const UPLOADS_ROOT = join(process.cwd(), 'uploads');
-const ALLOWED_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+export const ALLOWED_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 // Generous cap on what a phone camera hands us before processing — the
 // output written to disk ends up nowhere near this, see resizeToWebp below.
-const MAX_UPLOAD_SIZE_BYTES = 15 * 1024 * 1024;
+export const MAX_UPLOAD_SIZE_BYTES = 15 * 1024 * 1024;
 
 // The client-supplied Content-Type is trivially spoofable, so it's not
 // really a content check — this looks at the actual bytes instead. sharp
@@ -77,6 +77,27 @@ export async function resizeToWebp(buffer: Buffer, maxDimension = MAX_DIMENSION_
   }
 }
 
+/** Validates, resizes and writes an uploaded image under a tenant's upload folder, returning the URL it's served at. Shared by any endpoint that accepts an image (product/logo uploads here, the storefront's Zelle proof-screenshot upload in OrdersController). */
+export async function saveUploadedImage(
+  tenantId: string,
+  file: Express.Multer.File | undefined,
+  maxDimension = MAX_DIMENSION_PX,
+): Promise<{ url: string }> {
+  if (!file) throw new BadRequestException('No file uploaded');
+  if (!hasValidImageSignature(file.buffer)) {
+    throw new BadRequestException('This file does not look like a real JPEG, PNG, WEBP or GIF image');
+  }
+
+  const dir = join(UPLOADS_ROOT, tenantId);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+  const filename = `${randomUUID()}.webp`;
+  const output = await resizeToWebp(file.buffer, maxDimension);
+  await writeFile(join(dir, filename), output);
+
+  return { url: `/uploads/${tenantId}/${filename}` };
+}
+
 @ApiTags('uploads')
 @UseGuards(TenantRequiredGuard)
 @Roles('OWNER', 'STAFF')
@@ -97,20 +118,7 @@ export class UploadsController {
     }),
   )
   async uploadImage(@UploadedFile() file: Express.Multer.File, @Body() dto: UploadImageDto, @Req() req: TenantRequest) {
-    if (!file) throw new BadRequestException('No file uploaded');
-    if (!hasValidImageSignature(file.buffer)) {
-      throw new BadRequestException('This file does not look like a real JPEG, PNG, WEBP or GIF image');
-    }
-
-    const tenantId = req.tenantId!;
-    const dir = join(UPLOADS_ROOT, tenantId);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-
-    const filename = `${randomUUID()}.webp`;
     const maxDimension = dto.type === 'logo' ? LOGO_MAX_DIMENSION_PX : MAX_DIMENSION_PX;
-    const output = await resizeToWebp(file.buffer, maxDimension);
-    await writeFile(join(dir, filename), output);
-
-    return { url: `/uploads/${tenantId}/${filename}` };
+    return saveUploadedImage(req.tenantId!, file, maxDimension);
   }
 }

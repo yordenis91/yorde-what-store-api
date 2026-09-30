@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -9,11 +10,14 @@ import {
   Query,
   Res,
   Sse,
+  UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
+import { memoryStorage } from 'multer';
 import { Observable, map } from 'rxjs';
 import { CurrentTenantId, Public, Roles } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
@@ -21,8 +25,16 @@ import { CurrentCustomerId } from '../customers/decorators/current-customer-id.d
 import { OptionalCustomerAuthGuard } from '../customers/guards/optional-customer-auth.guard';
 import { Audit } from '../audit/decorators/audit.decorator';
 import { AuditInterceptor } from '../audit/interceptors/audit.interceptor';
+import { ALLOWED_MIME_TYPES, MAX_UPLOAD_SIZE_BYTES, saveUploadedImage } from '../uploads/uploads.controller';
 import { OrdersService } from './orders.service';
-import { CreateOrderDto, UpdateOrderStatusDto, OrderQueryDto, PaymentProofDto, QuoteOrderDto } from './dto';
+import {
+  CreateOrderDto,
+  UpdateOrderStatusDto,
+  OrderQueryDto,
+  PaymentProofDto,
+  PaymentProofImageDto,
+  QuoteOrderDto,
+} from './dto';
 
 @ApiTags('storefront-orders')
 @Public()
@@ -53,6 +65,39 @@ export class StorefrontOrdersController {
   @Post(':id/payment-proof')
   submitPaymentProof(@CurrentTenantId() tenantId: string, @Param('id') id: string, @Body() dto: PaymentProofDto) {
     return this.ordersService.submitPaymentProof(tenantId, id, dto);
+  }
+
+  /**
+   * Same as above, but takes the screenshot itself instead of an already-
+   * hosted URL — what the checkout/order-confirmation page actually has on
+   * hand. `/uploads/image` can't be reused here: it requires an OWNER/STAFF
+   * session, which a customer (often a guest) placing a Zelle order never
+   * has. Otherwise identical to it — same magic-byte check, resize-to-WebP,
+   * per-tenant folder — then hands the resulting URL to submitPaymentProof,
+   * which re-validates the order itself (tenant, ZELLE, not already paid).
+   */
+  @Post(':id/payment-proof-image')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: MAX_UPLOAD_SIZE_BYTES },
+      fileFilter: (_req, file, cb) => {
+        if (!ALLOWED_MIME_TYPES.has(file.mimetype)) {
+          cb(new BadRequestException('Only JPEG, PNG, WEBP or GIF images are allowed'), false);
+          return;
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  async submitPaymentProofImage(
+    @CurrentTenantId() tenantId: string,
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() dto: PaymentProofImageDto,
+  ) {
+    const { url } = await saveUploadedImage(tenantId, file);
+    return this.ordersService.submitPaymentProof(tenantId, id, { proofUrl: url, reference: dto.reference });
   }
 }
 
