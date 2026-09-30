@@ -18,8 +18,11 @@ export class UsersService {
   ) {}
 
   async listMembers(tenantId: string) {
+    // removeMember only soft-deletes (isActive: false) so it can be undone —
+    // without this filter a "removed" member never actually disappears from
+    // the roster the OWNER sees.
     return this.prisma.tenantMember.findMany({
-      where: { tenantId },
+      where: { tenantId, isActive: true },
       include: { user: { select: { id: true, email: true, name: true, isActive: true } } },
       orderBy: { createdAt: 'asc' },
     });
@@ -36,11 +39,19 @@ export class UsersService {
     const existingMembership = await this.prisma.tenantMember.findUnique({
       where: { tenantId_userId: { tenantId, userId: user.id } },
     });
-    if (existingMembership) throw new ConflictException('User is already a member of this store');
+    if (existingMembership?.isActive) throw new ConflictException('User is already a member of this store');
 
-    const membership = await this.prisma.tenantMember.create({
-      data: { tenantId, userId: user.id, role: 'STAFF', permissions: dto.permissions ?? [] },
-    });
+    // A previously-removed member (isActive: false) re-invites into the same
+    // row instead of colliding with the tenantId+userId unique constraint —
+    // otherwise an OWNER could never undo a mistaken removal.
+    const membership = existingMembership
+      ? await this.prisma.tenantMember.update({
+          where: { id: existingMembership.id },
+          data: { isActive: true, role: 'STAFF', permissions: dto.permissions ?? [] },
+        })
+      : await this.prisma.tenantMember.create({
+          data: { tenantId, userId: user.id, role: 'STAFF', permissions: dto.permissions ?? [] },
+        });
 
     const tenant = await this.prisma.db.tenant.findUniqueOrThrow({
       where: { id: tenantId },
