@@ -84,6 +84,15 @@ tenant admin panel, and the Super Admin platform console.
 - Pluggable payment adapters (Stripe, MercadoPago) behind a common
   interface, with webhook signature verification.
 - WhatsApp/Telegram checkout as first-class fulfillment methods.
+- **Zelle as a semi-manual payment method**: the storefront shows the
+  tenant's recipient account and instructions, the customer uploads a
+  confirmation screenshot (before or after the order is placed — never
+  blocking it), and an OWNER/STAFF admin confirms or rejects it from the
+  order detail page. Confirming mirrors a successful Stripe/MercadoPago
+  webhook exactly — `paymentStatus → PAID`, `status → CONFIRMED`, invoice
+  queued — through the same terminal-status guard the two webhook handlers
+  already share, so a stray confirm/reject can never revive a cancelled or
+  refunded order.
 - Background email, invoice PDF, inventory sync, and order notification
   processing via Redis-backed queues — nothing blocks the request path.
 
@@ -97,7 +106,7 @@ tenant admin panel, and the Super Admin platform console.
 | Database | PostgreSQL, via [Prisma](https://www.prisma.io/) 5 |
 | Cache / queues | Redis, via [BullMQ](https://docs.bullmq.io/) |
 | Auth | JWT (access + rotating refresh), TOTP 2FA (`otplib`) |
-| Payments | Stripe, MercadoPago |
+| Payments | Stripe, MercadoPago, Zelle (manual, admin-reviewed) |
 | Storage | Local disk (product images), S3-compatible (backups) |
 | Logging | Winston (structured JSON) |
 | API docs | OpenAPI/Swagger |
@@ -185,7 +194,10 @@ src/
 │   ├── category-templates/    Platform-curated starter categories
 │   ├── dashboard/             Tenant sales/orders analytics
 │   ├── visits/                Storefront visit tracking (RLS + auto-purge)
-│   ├── uploads/                Image upload (resized to .webp)
+│   ├── uploads/                Image upload (resized to .webp) — also backs
+│   │                            the public Zelle proof-screenshot endpoint
+│   │                            (orders module), since a customer placing a
+│   │                            Zelle order has no OWNER/STAFF session
 │   ├── email-templates/       Per-tenant transactional email templates
 │   │
 │   ├── tenants/               Tenant CRUD, payment credentials, SMTP config
@@ -200,7 +212,8 @@ src/
 │   ├── customers/             Storefront customer accounts
 │   ├── users/                 Tenant staff management
 │   │
-│   └── payments/              Stripe/MercadoPago adapters, webhooks
+│   └── payments/              Stripe/MercadoPago adapters & webhooks, Zelle
+│                              recipient config + manual confirm/reject
 │
 ├── queue/                     BullMQ processors (see Background jobs)
 ├── common/
