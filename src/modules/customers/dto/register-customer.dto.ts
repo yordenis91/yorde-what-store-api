@@ -18,4 +18,10 @@ export class RegisterCustomerDto {
   @IsString()
   @MaxLength(30)
   phone?: string;
+
+  /** Present only for a mobile client — see MobileRefreshCustomerDto's doc comment. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  deviceId?: string;
 }

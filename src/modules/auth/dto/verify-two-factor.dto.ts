@@ -1,4 +1,4 @@
-import { IsString, Length } from 'class-validator';
+import { IsOptional, IsString, Length, MaxLength } from 'class-validator';
 
 export class VerifyTwoFactorDto {
   @IsString()
@@ -7,4 +7,10 @@ export class VerifyTwoFactorDto {
   @IsString()
   @Length(6, 6)
   code: string;
+
+  /** Present only for a mobile client — see MobileRefreshDto's doc comment. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  deviceId?: string;
 }

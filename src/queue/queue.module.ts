@@ -18,6 +18,7 @@ import { EmailTemplatesModule } from '../modules/email-templates/email-templates
 import { TenantsModule } from '../modules/tenants/tenants.module';
 import { PlatformSettingsModule } from '../modules/platform-settings/platform-settings.module';
 import { BackupsModule } from '../modules/backups/backups.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { BackupsModule } from '../modules/backups/backups.module';
     TenantsModule,
     PlatformSettingsModule,
     BackupsModule,
+    NotificationsModule,
     BullModule.registerQueue(
       { name: EMAIL_QUEUE },
       { name: INVOICE_PDF_QUEUE },

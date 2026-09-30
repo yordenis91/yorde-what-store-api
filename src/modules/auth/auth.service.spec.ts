@@ -62,6 +62,7 @@ function buildService(overrides: {
 
   const prisma = {
     refreshToken: { findFirst, update, create, updateMany },
+    mobileRefreshToken: { findFirst, update, create, updateMany },
     user: { findUniqueOrThrow, findUnique: userFindUnique, update: userUpdate },
     tenantMember: { findFirst: membershipFindFirst },
     tenant: { findUniqueOrThrow: tenantFindUniqueOrThrow },

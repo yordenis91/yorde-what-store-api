@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service';
+import { getScopedClient } from '../../prisma/tenant-context';
 
 export const PASSWORD_RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1h
 
@@ -14,7 +15,10 @@ export function hashResetToken(token: string): string {
  * hashing, TTL — is defined once. Returns the raw token to embed in the
  * emailed link; only its hash is ever persisted.
  */
-export async function issuePasswordResetToken(prisma: PrismaService, userId: string): Promise<string> {
+export async function issuePasswordResetToken(
+  prisma: PrismaService | ReturnType<typeof getScopedClient>,
+  userId: string,
+): Promise<string> {
   const rawToken = randomBytes(32).toString('hex');
   await prisma.passwordResetToken.create({
     data: {

@@ -12,6 +12,7 @@ import {
   appConfig,
   jwtConfig,
   jwtCustomerConfig,
+  mobileAuthConfig,
   redisConfig,
   stripeConfig,
   mercadoPagoConfig,
@@ -41,6 +42,7 @@ import { PaymentsModule } from './modules/payments/payments.module';
 import { PlansModule } from './modules/plans/plans.module';
 import { UsersModule } from './modules/users/users.module';
 import { CustomersModule } from './modules/customers/customers.module';
+import { DevicesModule } from './modules/devices/devices.module';
 import { VisitsModule } from './modules/visits/visits.module';
 import { EmailTemplatesModule } from './modules/email-templates/email-templates.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
@@ -64,6 +66,7 @@ import { AppService } from './app.service';
         appConfig,
         jwtConfig,
         jwtCustomerConfig,
+        mobileAuthConfig,
         redisConfig,
         stripeConfig,
         mercadoPagoConfig,
@@ -114,6 +117,7 @@ import { AppService } from './app.service';
     PlansModule,
     UsersModule,
     CustomersModule,
+    DevicesModule,
     VisitsModule,
     EmailTemplatesModule,
     UploadsModule,

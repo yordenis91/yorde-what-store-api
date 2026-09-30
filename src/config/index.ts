@@ -25,6 +25,18 @@ export const jwtCustomerConfig = registerAs('jwtCustomer', () => ({
   refreshExpiresIn: process.env.JWT_CUSTOMER_REFRESH_EXPIRES_IN ?? '30d',
 }));
 
+/**
+ * TTLs for the mobile-native refresh tokens issued by /auth/mobile/refresh
+ * and /storefront/customers/auth/mobile/refresh — independent of jwt(Customer).refreshExpiresIn,
+ * which governs the web cookie flow. Staff gets a shorter TTL than customers
+ * since a staff session carries more authority (tenant management, orders,
+ * payouts) than a shopper's.
+ */
+export const mobileAuthConfig = registerAs('mobileAuth', () => ({
+  staffRefreshTtlDays: parseInt(process.env.MOBILE_STAFF_REFRESH_TTL_DAYS ?? '7', 10),
+  customerRefreshTtlDays: parseInt(process.env.MOBILE_CUSTOMER_REFRESH_TTL_DAYS ?? '30', 10),
+}));
+
 export const redisConfig = registerAs('redis', () => ({
   host: process.env.REDIS_HOST ?? 'localhost',
   port: parseInt(process.env.REDIS_PORT ?? '6379', 10),
