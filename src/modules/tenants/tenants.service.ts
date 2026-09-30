@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { decryptSecret, encryptSecret } from '../../common/utils/crypto.util';
 import { maskSmtpPassword } from '../../common/utils/mask-tenant-secrets.util';
@@ -62,7 +63,24 @@ export class TenantsService {
       },
     });
     if (!tenant) throw new NotFoundException('Store not found');
-    return tenant;
+
+    // Unlike Stripe/MercadoPago credentials (secret keys — never returned over
+    // the API, see getDecryptedCredentials's own doc comment), a Zelle
+    // "credential" is just the recipient info a customer needs to pay: name,
+    // email/phone, instructions. It's meant to be shown here, on the public
+    // storefront, not kept secret.
+    //
+    // getDecryptedCredentials defaults to reading through `prisma.db`, which
+    // only resolves to a working client inside a tenant-scoped transaction
+    // (normally opened by TenantScopeInterceptor before a request reaches a
+    // service). This lookup runs on the one request that discovers the
+    // tenant by slug rather than starting with one already resolved, so no
+    // such transaction is open yet — open one here and hand it in directly.
+    const zellePaymentInfo = await this.prisma.withTenant(tenant.id, (tx) =>
+      this.getDecryptedCredentials(tenant.id, 'ZELLE', tx),
+    );
+
+    return { ...tenant, zellePaymentInfo };
   }
 
   async createAdditional(userId: string, dto: CreateTenantDto) {
@@ -152,9 +170,18 @@ export class TenantsService {
     return settings.map(({ credentials: _credentials, ...rest }) => rest);
   }
 
-  /** Internal use only (payments module) — never exposed over the API. */
-  async getDecryptedCredentials(tenantId: string, provider: 'STRIPE' | 'MERCADOPAGO') {
-    const setting = await this.prisma.db.tenantPaymentSetting.findUnique({
+  /**
+   * Internal use only (payments module) — never exposed over the API as-is.
+   * `client` defaults to `prisma.db`, the request's own tenant-scoped
+   * transaction; pass one explicitly (e.g. from `prisma.withTenant`) when
+   * calling from outside a request that already resolved a tenant.
+   */
+  async getDecryptedCredentials(
+    tenantId: string,
+    provider: 'STRIPE' | 'MERCADOPAGO' | 'ZELLE',
+    client: Pick<Prisma.TransactionClient, 'tenantPaymentSetting'> = this.prisma.db,
+  ) {
+    const setting = await client.tenantPaymentSetting.findUnique({
       where: { tenantId_provider: { tenantId, provider: provider as any } },
     });
     if (!setting || !setting.isEnabled) return null;

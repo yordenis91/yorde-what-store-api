@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Order } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantsService } from '../tenants/tenants.service';
@@ -262,5 +262,117 @@ describe('PaymentsService.refundOrderPayment', () => {
     const order = { fulfillmentMethod: 'MERCADOPAGO', mercadoPagoPaymentId: 'mp-1' } as Order;
 
     await expect(service.refundOrderPayment(TENANT_ID, order)).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+describe('PaymentsService.assertZelleConfigured', () => {
+  it('rejects when the store never set up a Zelle recipient', async () => {
+    const { service, tenantsService } = buildService();
+    (tenantsService.getDecryptedCredentials as jest.Mock).mockResolvedValue(null);
+
+    await expect(service.assertZelleConfigured(TENANT_ID)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('passes once a Zelle recipient is configured', async () => {
+    const { service, tenantsService } = buildService();
+    (tenantsService.getDecryptedCredentials as jest.Mock).mockResolvedValue({ recipientEmail: 'me@x.com' });
+
+    await expect(service.assertZelleConfigured(TENANT_ID)).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * The manual (Zelle) equivalent of the Stripe/MercadoPago webhook handlers
+ * above — same end state (paymentStatus PAID, status CONFIRMED, invoice
+ * queued), same terminal-status guard, but triggered by an admin reviewing a
+ * screenshot instead of a provider callback.
+ */
+describe('PaymentsService.confirmManualPayment', () => {
+  it('throws NotFoundException for an order that does not exist', async () => {
+    const { service } = buildService({ order: null });
+    await expect(service.confirmManualPayment(TENANT_ID, 'order-1')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('refuses to confirm a non-Zelle order', async () => {
+    const { service } = buildService({ order: { id: 'order-1', fulfillmentMethod: 'WHATSAPP', status: 'PENDING' } });
+    await expect(service.confirmManualPayment(TENANT_ID, 'order-1')).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('refuses to confirm without a submitted proof', async () => {
+    const { service, update } = buildService({
+      order: {
+        id: 'order-1',
+        fulfillmentMethod: 'ZELLE',
+        status: 'PENDING',
+        paymentStatus: 'PENDING',
+        paymentProofUrl: null,
+      },
+    });
+    await expect(service.confirmManualPayment(TENANT_ID, 'order-1')).rejects.toBeInstanceOf(BadRequestException);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('refuses to confirm an order already in a terminal status', async () => {
+    const { service } = buildService({
+      order: {
+        id: 'order-1',
+        fulfillmentMethod: 'ZELLE',
+        status: 'CANCELLED',
+        paymentStatus: 'PENDING',
+        paymentProofUrl: '/uploads/t/proof.webp',
+      },
+    });
+    await expect(service.confirmManualPayment(TENANT_ID, 'order-1')).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('marks the order paid and confirmed, and queues the invoice', async () => {
+    const { service, update, invoiceQueue } = buildService({
+      order: {
+        id: 'order-1',
+        fulfillmentMethod: 'ZELLE',
+        status: 'PENDING',
+        paymentStatus: 'PENDING',
+        paymentProofUrl: '/uploads/t/proof.webp',
+      },
+    });
+
+    const result = await service.confirmManualPayment(TENANT_ID, 'order-1');
+
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'order-1' },
+      data: { paymentStatus: 'PAID', status: 'CONFIRMED' },
+    });
+    expect(invoiceQueue.add).toHaveBeenCalledWith('generate-invoice', { tenantId: TENANT_ID, orderId: 'order-1' });
+    expect(result).toEqual(expect.objectContaining({ paymentStatus: 'PAID', status: 'CONFIRMED' }));
+  });
+
+  it('is a no-op (not an error) for an order already marked paid', async () => {
+    const { service, update } = buildService({
+      order: { id: 'order-1', fulfillmentMethod: 'ZELLE', status: 'CONFIRMED', paymentStatus: 'PAID' },
+    });
+
+    await service.confirmManualPayment(TENANT_ID, 'order-1');
+
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe('PaymentsService.rejectManualPayment', () => {
+  it('clears the submitted proof without touching order/payment status', async () => {
+    const { service, update } = buildService({
+      order: { id: 'order-1', fulfillmentMethod: 'ZELLE', status: 'PENDING', paymentProofUrl: '/uploads/t/proof.webp' },
+    });
+
+    await service.rejectManualPayment(TENANT_ID, 'order-1');
+
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'order-1' },
+      data: { paymentProofUrl: null, paymentReference: null },
+    });
+  });
+
+  it('refuses to reject a non-Zelle order', async () => {
+    const { service } = buildService({ order: { id: 'order-1', fulfillmentMethod: 'STRIPE' } });
+    await expect(service.rejectManualPayment(TENANT_ID, 'order-1')).rejects.toBeInstanceOf(BadRequestException);
   });
 });

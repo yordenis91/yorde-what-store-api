@@ -64,4 +64,13 @@ export class CreateOrderDto {
   @IsOptional()
   @IsUUID()
   sessionId?: string;
+
+  /** Zelle only — lets a customer attach proof at checkout instead of coming back to submit it separately. Ignored for every other fulfillmentMethod. */
+  @IsOptional()
+  @IsString()
+  paymentProofUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  paymentReference?: string;
 }

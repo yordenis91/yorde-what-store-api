@@ -22,7 +22,7 @@ import { OptionalCustomerAuthGuard } from '../customers/guards/optional-customer
 import { Audit } from '../audit/decorators/audit.decorator';
 import { AuditInterceptor } from '../audit/interceptors/audit.interceptor';
 import { OrdersService } from './orders.service';
-import { CreateOrderDto, UpdateOrderStatusDto, OrderQueryDto, QuoteOrderDto } from './dto';
+import { CreateOrderDto, UpdateOrderStatusDto, OrderQueryDto, PaymentProofDto, QuoteOrderDto } from './dto';
 
 @ApiTags('storefront-orders')
 @Public()
@@ -41,6 +41,18 @@ export class StorefrontOrdersController {
   @Post('quote')
   quote(@CurrentTenantId() tenantId: string, @Body() dto: QuoteOrderDto) {
     return this.ordersService.quote(tenantId, dto);
+  }
+
+  /**
+   * Lets a customer attach their Zelle screenshot/reference to an order they
+   * already placed — from the same checkout session (usual case), or a later
+   * visit. The order id alone is the only "auth" this needs: same trust
+   * level as creating the order in the first place, and it only ever
+   * narrows what the order accepts (nothing here can mark a payment PAID).
+   */
+  @Post(':id/payment-proof')
+  submitPaymentProof(@CurrentTenantId() tenantId: string, @Param('id') id: string, @Body() dto: PaymentProofDto) {
+    return this.ordersService.submitPaymentProof(tenantId, id, dto);
   }
 }
 
@@ -90,6 +102,20 @@ export class OrdersController {
   @Patch(':id/status')
   updateStatus(@CurrentTenantId() tenantId: string, @Param('id') id: string, @Body() dto: UpdateOrderStatusDto) {
     return this.ordersService.updateStatus(tenantId, id, dto.status);
+  }
+
+  /** The admin-side review action for a Zelle order's submitted proof — marks it paid and confirmed, and queues the invoice, exactly like a successful Stripe/MercadoPago webhook would. */
+  @Audit({ action: 'order.zelle_payment_confirm', entityType: 'Order' })
+  @Post(':id/confirm-zelle-payment')
+  confirmZellePayment(@CurrentTenantId() tenantId: string, @Param('id') id: string) {
+    return this.ordersService.confirmZellePayment(tenantId, id);
+  }
+
+  /** Rejects the submitted proof (not the order) so the customer can resubmit — the order itself stays PENDING. */
+  @Audit({ action: 'order.zelle_payment_reject', entityType: 'Order' })
+  @Post(':id/reject-zelle-payment')
+  rejectZellePayment(@CurrentTenantId() tenantId: string, @Param('id') id: string) {
+    return this.ordersService.rejectZellePayment(tenantId, id);
   }
 
   /**

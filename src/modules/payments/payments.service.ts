@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import Stripe from 'stripe';
@@ -230,5 +230,54 @@ export class PaymentsService {
         throw new BadRequestException(`MercadoPago could not process this refund: ${message}`);
       }
     }
+  }
+
+  /** Rejects placing a Zelle order at all if the store never set up a recipient account — otherwise a customer would see payment instructions for an account that doesn't exist. */
+  async assertZelleConfigured(tenantId: string) {
+    const config = await this.tenantsService.getDecryptedCredentials(tenantId, 'ZELLE');
+    if (!config) throw new BadRequestException('Zelle is not configured for this store');
+  }
+
+  /**
+   * Admin-initiated equivalent of a successful payment webhook, for the one
+   * fulfillment method with no online gateway to call one from: a human has
+   * to look at the submitted screenshot/reference and decide. Requires proof
+   * to actually have been submitted — nothing else here confirms the money
+   * moved.
+   */
+  async confirmManualPayment(tenantId: string, orderId: string) {
+    const order = await this.prisma.db.order.findFirst({ where: { id: orderId, tenantId } });
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.fulfillmentMethod !== 'ZELLE') {
+      throw new BadRequestException('Only Zelle orders can be confirmed this way');
+    }
+    if (TERMINAL_ORDER_STATUSES.includes(order.status)) {
+      throw new ConflictException(`Order is already ${order.status}`);
+    }
+    if (order.paymentStatus === 'PAID') return order;
+    if (!order.paymentProofUrl) {
+      throw new BadRequestException('No payment proof has been submitted for this order yet');
+    }
+
+    const updated = await this.prisma.db.order.update({
+      where: { id: orderId },
+      data: { paymentStatus: 'PAID', status: 'CONFIRMED' },
+    });
+    await this.invoiceQueue.add('generate-invoice', { tenantId, orderId: updated.id });
+    return updated;
+  }
+
+  /** Clears a rejected submission (not the order itself) so the customer/admin can tell "never submitted" apart from "submitted, waiting" and the customer knows to resubmit. The order stays PENDING either way. */
+  async rejectManualPayment(tenantId: string, orderId: string) {
+    const order = await this.prisma.db.order.findFirst({ where: { id: orderId, tenantId } });
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.fulfillmentMethod !== 'ZELLE') {
+      throw new BadRequestException('Only Zelle orders can be rejected this way');
+    }
+
+    return this.prisma.db.order.update({
+      where: { id: orderId },
+      data: { paymentProofUrl: null, paymentReference: null },
+    });
   }
 }

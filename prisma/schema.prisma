@@ -38,6 +38,7 @@ enum FulfillmentMethod {
   TELEGRAM
   STRIPE
   MERCADOPAGO
+  ZELLE
 }
 
 enum OrderStatus {
@@ -77,6 +78,7 @@ enum DiscountType {
 enum PaymentProvider {
   STRIPE
   MERCADOPAGO
+  ZELLE
 }
 
 // ---------------------------------------------------------------------------
@@ -732,6 +734,12 @@ model Order {
 
   mercadoPagoPreferenceId String? @map("mercado_pago_preference_id")
   mercadoPagoPaymentId    String? @map("mercado_pago_payment_id")
+
+  /// Customer-submitted evidence for a Zelle transfer — an uploaded screenshot
+  /// URL and/or a free-text confirmation number. Cleared on rejection so the
+  /// admin UI can tell "never submitted" apart from "submitted, awaiting review".
+  paymentProofUrl  String? @map("payment_proof_url")
+  paymentReference String? @map("payment_reference")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

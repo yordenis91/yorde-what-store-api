@@ -1,4 +1,4 @@
-import { ConflictException, BadRequestException } from '@nestjs/common';
+import { ConflictException, BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getQueueToken } from '@nestjs/bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -691,5 +691,92 @@ describe('OrdersService live events', () => {
     await service.create(TENANT_ID, baseOrder);
 
     expect(eventsForOtherTenant).toHaveLength(0);
+  });
+});
+
+describe('OrdersService Zelle payments', () => {
+  const zelleOrder = { ...baseOrder, fulfillmentMethod: 'ZELLE' as const };
+
+  it("create() checks the store's Zelle config before doing any pricing/stock work", async () => {
+    const double = createPrismaDouble({});
+    const assertZelleConfigured = jest
+      .fn()
+      .mockRejectedValue(new BadRequestException('Zelle is not configured for this store'));
+    const service = await buildService(double, { assertZelleConfigured });
+
+    await expect(service.create(TENANT_ID, zelleOrder)).rejects.toThrow(BadRequestException);
+
+    expect(assertZelleConfigured).toHaveBeenCalledWith(TENANT_ID);
+    expect(double.db.order.create).not.toHaveBeenCalled();
+  });
+
+  it('creates a PENDING/PENDING order and stores any proof submitted at checkout when Zelle is configured', async () => {
+    const double = createPrismaDouble({});
+    const assertZelleConfigured = jest.fn().mockResolvedValue(undefined);
+    const service = await buildService(double, { assertZelleConfigured });
+
+    const result = await service.create(TENANT_ID, {
+      ...zelleOrder,
+      paymentProofUrl: 'https://cdn.example.com/proof.webp',
+      paymentReference: 'CONF-123',
+    });
+
+    expect(result.order.status).toBe('PENDING');
+    expect(result.order.paymentStatus).toBe('PENDING');
+    expect(result.fulfillment).toEqual({ type: 'ZELLE' });
+    const written = double.db.order.create.mock.calls[0][0].data;
+    expect(written.paymentProofUrl).toBe('https://cdn.example.com/proof.webp');
+    expect(written.paymentReference).toBe('CONF-123');
+  });
+
+  describe('submitPaymentProof', () => {
+    const existingOrder = {
+      id: 'order-1',
+      fulfillmentMethod: 'ZELLE',
+      paymentStatus: 'PENDING',
+      items: [],
+    };
+
+    it('attaches the submitted proof to the order and announces the update', async () => {
+      const double = createPrismaDouble({ order: existingOrder });
+      const service = await buildService(double);
+      const events = collectEvents(service, TENANT_ID);
+
+      const updated = await service.submitPaymentProof(TENANT_ID, 'order-1', {
+        proofUrl: 'https://cdn.example.com/proof.webp',
+        reference: 'CONF-123',
+      });
+
+      expect(updated.paymentProofUrl).toBe('https://cdn.example.com/proof.webp');
+      expect(updated.paymentReference).toBe('CONF-123');
+      expect(events).toEqual([{ type: 'order.status_updated', order: expect.objectContaining({ id: 'order-1' }) }]);
+    });
+
+    it('rejects with 404 for an order that does not belong to this tenant', async () => {
+      const double = createPrismaDouble({});
+      const service = await buildService(double);
+
+      await expect(
+        service.submitPaymentProof(TENANT_ID, 'missing', { proofUrl: 'https://cdn.example.com/proof.webp' }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('rejects proof submission for a non-Zelle order', async () => {
+      const double = createPrismaDouble({ order: { ...existingOrder, fulfillmentMethod: 'STRIPE' } });
+      const service = await buildService(double);
+
+      await expect(
+        service.submitPaymentProof(TENANT_ID, 'order-1', { proofUrl: 'https://cdn.example.com/proof.webp' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('refuses to swap the proof on an order that has already been paid', async () => {
+      const double = createPrismaDouble({ order: { ...existingOrder, paymentStatus: 'PAID' } });
+      const service = await buildService(double);
+
+      await expect(
+        service.submitPaymentProof(TENANT_ID, 'order-1', { proofUrl: 'https://cdn.example.com/proof.webp' }),
+      ).rejects.toThrow(ConflictException);
+    });
   });
 });

@@ -7,7 +7,7 @@ import { Queue } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PaginatedResult } from '../../common/dto/pagination.dto';
 import { toCsv } from '../../common/utils/csv.util';
-import { CreateOrderDto, OrderItemInputDto, OrderQueryDto, QuoteOrderDto } from './dto';
+import { CreateOrderDto, OrderItemInputDto, OrderQueryDto, PaymentProofDto, QuoteOrderDto } from './dto';
 import { applyCouponDiscount, priceLineItem, round2 } from './pricing.util';
 import { buildWhatsappUrl, renderItemLine, renderOrderMessage } from './fulfillment/message-renderer';
 import { EMAIL_JOB_OPTIONS, EMAIL_QUEUE, ORDER_NOTIFICATION_QUEUE } from '../../queue/queue.constants';
@@ -58,6 +58,13 @@ export class OrdersService {
   async create(tenantId: string, dto: CreateOrderDto, customerId?: string) {
     const tenant = await this.prisma.db.tenant.findUniqueOrThrow({ where: { id: tenantId } });
 
+    // Fails fast, before pricing/stock work, if the store never configured a
+    // Zelle recipient — otherwise the order would be created with no actual
+    // account for the customer to have paid.
+    if (dto.fulfillmentMethod === 'ZELLE') {
+      await this.paymentsService.assertZelleConfigured(tenantId);
+    }
+
     const { pricedLines, coupon, totals } = await this.priceOrder(tenantId, dto);
     const { subtotal, taxTotal, discountTotal, shippingTotal, grandTotal } = totals;
 
@@ -90,6 +97,8 @@ export class OrdersService {
         couponId: coupon?.id,
         shippingId: dto.shippingId,
         shippingAddress: dto.shippingAddress as any,
+        paymentProofUrl: dto.paymentProofUrl,
+        paymentReference: dto.paymentReference,
         items: {
           create: pricedLines.map(({ product, variant, priced }) => ({
             tenantId,
@@ -142,7 +151,41 @@ export class OrdersService {
     }
 
     this.orderEvents.emit(tenantId, this.toOrderEvent('order.created', order));
-    return { order, fulfillment: { type: dto.fulfillmentMethod as 'STRIPE' | 'MERCADOPAGO' } };
+    return { order, fulfillment: { type: dto.fulfillmentMethod as 'STRIPE' | 'MERCADOPAGO' | 'ZELLE' } };
+  }
+
+  /**
+   * Lets a customer attach (or replace) their Zelle proof after the order
+   * already exists — the checkout step it's usually filled in from, but
+   * nothing here assumes that; any later call with the same order id works
+   * the same way. Refuses once the order is already marked PAID so a
+   * confirmed payment's evidence can't be swapped out from under it.
+   */
+  async submitPaymentProof(tenantId: string, orderId: string, dto: PaymentProofDto) {
+    const order = await this.prisma.db.order.findFirst({ where: { id: orderId, tenantId } });
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.fulfillmentMethod !== 'ZELLE') {
+      throw new BadRequestException('This order is not a Zelle order');
+    }
+    if (order.paymentStatus === 'PAID') {
+      throw new ConflictException('This order has already been paid');
+    }
+
+    const updated = await this.prisma.db.order.update({
+      where: { id: orderId },
+      data: { paymentProofUrl: dto.proofUrl, paymentReference: dto.reference },
+      include: ORDER_INCLUDE,
+    });
+    this.orderEvents.emit(tenantId, this.toOrderEvent('order.status_updated', updated));
+    return updated;
+  }
+
+  confirmZellePayment(tenantId: string, orderId: string) {
+    return this.paymentsService.confirmManualPayment(tenantId, orderId);
+  }
+
+  rejectZellePayment(tenantId: string, orderId: string) {
+    return this.paymentsService.rejectManualPayment(tenantId, orderId);
   }
 
   /**
