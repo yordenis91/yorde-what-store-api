@@ -83,12 +83,21 @@ function createPrismaDouble(options: {
     },
     product: {
       findMany: jest.fn().mockResolvedValue(products),
+      findFirst: jest.fn((args: { where: { id: string } }) =>
+        Promise.resolve(products.find((p) => p.id === args.where.id) ?? null),
+      ),
       updateMany: jest.fn((args: { where: unknown; data: unknown }) => {
         stockUpdates.push({ model: 'product', ...args });
         return Promise.resolve(nextCount());
       }),
     },
+    orderItem: {
+      create: jest.fn().mockResolvedValue({}),
+      update: jest.fn().mockResolvedValue({}),
+      delete: jest.fn().mockResolvedValue({}),
+    },
     productVariant: {
+      findFirst: jest.fn().mockResolvedValue(null),
       updateMany: jest.fn((args: { where: unknown; data: unknown }) => {
         stockUpdates.push({ model: 'variant', ...args });
         return Promise.resolve(nextCount());
@@ -904,4 +913,156 @@ describe('OrdersService listing order and soft delete', () => {
       expect(double.db.order.update).not.toHaveBeenCalled();
     },
   );
+});
+
+describe('OrdersService.updateDetails: items, shipping and payment', () => {
+  const line = (over: Record<string, unknown> = {}) => ({
+    id: 'li-1',
+    productId: 'p1',
+    variantId: null,
+    productName: 'Shirt',
+    quantity: 2,
+    unitPrice: '20.00', // sold at 20 even though the catalogue now says 25
+    taxAmount: '0',
+    lineTotal: '40.00',
+    taxBreakdown: [],
+    ...over,
+  });
+  const base = (over: Record<string, unknown> = {}) => ({
+    id: 'order-1',
+    status: 'PENDING',
+    paymentStatus: 'PENDING',
+    fulfillmentMethod: 'WHATSAPP',
+    subtotal: '40.00',
+    taxTotal: '0',
+    discountTotal: '0',
+    shippingTotal: '0',
+    grandTotal: '40.00',
+    couponId: null,
+    shippingAddress: null,
+    items: [line()],
+    ...over,
+  });
+  const tracked = { tracksInventory: true };
+
+  it('keeps the price a line was sold at when only its quantity changes, and takes only the difference from stock', async () => {
+    const double = createPrismaDouble({ order: base(), tenant: tracked });
+    const service = await buildService(double);
+
+    await service.updateDetails(TENANT_ID, 'order-1', { items: [{ productId: 'p1', quantity: 5 }] });
+
+    expect(double.db.orderItem.update.mock.calls[0][0].data).toMatchObject({ quantity: 5, lineTotal: 100 });
+    expect(double.db.order.update.mock.calls[0][0].data).toMatchObject({ subtotal: 100, grandTotal: 100 });
+    expect(double.stockUpdates).toEqual([expect.objectContaining({ data: { quantity: { decrement: 3 } } })]);
+  });
+
+  it('puts stock back for a smaller quantity and for a removed line', async () => {
+    const two = [line(), line({ id: 'li-2', productId: 'p2', productName: 'Hat', quantity: 3 })];
+    const double = createPrismaDouble({ order: base({ items: two }), tenant: tracked });
+    const service = await buildService(double);
+
+    await service.updateDetails(TENANT_ID, 'order-1', { items: [{ productId: 'p1', quantity: 1 }] });
+
+    expect(double.db.orderItem.delete).toHaveBeenCalledWith({ where: { id: 'li-2' } });
+    const increments = double.stockUpdates.map(
+      (u) => (u.data as { quantity: { increment: number } }).quantity.increment,
+    );
+    expect(increments.sort()).toEqual([1, 3]);
+  });
+
+  it('prices an added product from the catalogue, with its taxes', async () => {
+    const taxed = buildProduct({
+      id: 'p9',
+      name: 'Cap',
+      price: '10.00',
+      taxes: [{ tax: { name: 'VAT', rate: '10' } }],
+    });
+    const double = createPrismaDouble({ order: base(), products: [buildProduct(), taxed], tenant: tracked });
+    const service = await buildService(double);
+
+    await service.updateDetails(TENANT_ID, 'order-1', {
+      items: [
+        { productId: 'p1', quantity: 2 },
+        { productId: 'p9', quantity: 2 },
+      ],
+    });
+
+    expect(double.db.orderItem.create.mock.calls[0][0].data).toMatchObject({
+      productId: 'p9',
+      unitPrice: 10,
+      taxAmount: 2,
+      lineTotal: 22,
+    });
+    expect(double.db.order.update.mock.calls[0][0].data).toMatchObject({ subtotal: 60, taxTotal: 2, grandTotal: 62 });
+  });
+
+  it('re-applies the order coupon to the new amount', async () => {
+    const coupon = { id: 'c1', discountType: 'PERCENTAGE', discountValue: '10' };
+    const double = createPrismaDouble({
+      order: base({ couponId: 'c1', discountTotal: '4.00', grandTotal: '36.00' }),
+      coupon,
+    });
+    const service = await buildService(double);
+
+    await service.updateDetails(TENANT_ID, 'order-1', { items: [{ productId: 'p1', quantity: 5 }] });
+
+    expect(double.db.order.update.mock.calls[0][0].data).toMatchObject({ discountTotal: 10, grandTotal: 90 });
+  });
+
+  it('rejects an added line that stock cannot cover, before anything is committed', async () => {
+    const double = createPrismaDouble({ order: base(), tenant: tracked, stockUpdateCounts: [0] });
+    const service = await buildService(double);
+
+    await expect(
+      service.updateDetails(TENANT_ID, 'order-1', { items: [{ productId: 'p1', quantity: 99 }] }),
+    ).rejects.toThrow(ConflictException);
+    expect(double.db.order.update).not.toHaveBeenCalled();
+  });
+
+  it('switches shipping: cost comes from the option, and pick-up clears cost and address', async () => {
+    const shipping = { id: '11111111-1111-4111-8111-111111111111', name: 'Courier', cost: '7.50' };
+    const withShipping = createPrismaDouble({ order: base(), shipping });
+    await (await buildService(withShipping)).updateDetails(TENANT_ID, 'order-1', { shippingId: shipping.id });
+    expect(withShipping.db.order.update.mock.calls[0][0].data).toMatchObject({
+      shippingTotal: 7.5,
+      grandTotal: 47.5,
+      shippingId: shipping.id,
+    });
+
+    const pickup = createPrismaDouble({
+      order: base({ shippingTotal: '7.50', grandTotal: '47.50', shippingAddress: { line1: 'x' } }),
+    });
+    await (await buildService(pickup)).updateDetails(TENANT_ID, 'order-1', { shippingId: null });
+    expect(pickup.db.order.update.mock.calls[0][0].data).toMatchObject({
+      shippingTotal: 0,
+      grandTotal: 40,
+      shippingId: null,
+    });
+  });
+
+  it.each(['STRIPE', 'MERCADOPAGO'])(
+    'will not change what a paid %s order costs, but still lets contact details be fixed',
+    async (method) => {
+      const paid = base({ fulfillmentMethod: method, paymentStatus: 'PAID', status: 'CONFIRMED' });
+      const double = createPrismaDouble({ order: paid });
+      const service = await buildService(double);
+
+      await expect(
+        service.updateDetails(TENANT_ID, 'order-1', { items: [{ productId: 'p1', quantity: 9 }] }),
+      ).rejects.toThrow(ConflictException);
+      await expect(service.updateDetails(TENANT_ID, 'order-1', { customerName: 'Ana B' })).resolves.toBeDefined();
+    },
+  );
+
+  it('lets the merchant mark a WhatsApp or Zelle order paid, but never a card order', async () => {
+    for (const method of ['WHATSAPP', 'ZELLE']) {
+      const double = createPrismaDouble({ order: base({ fulfillmentMethod: method }) });
+      await (await buildService(double)).updateDetails(TENANT_ID, 'order-1', { paymentStatus: 'PAID' });
+      expect(double.db.order.update.mock.calls[0][0].data).toMatchObject({ paymentStatus: 'PAID' });
+    }
+    const card = createPrismaDouble({ order: base({ fulfillmentMethod: 'STRIPE' }) });
+    await expect(
+      (await buildService(card)).updateDetails(TENANT_ID, 'order-1', { paymentStatus: 'PAID' }),
+    ).rejects.toThrow(ConflictException);
+  });
 });

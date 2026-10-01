@@ -620,27 +620,242 @@ export class OrdersService {
     return updated;
   }
 
-  /** Corrects who an order is for and where it goes. Refused once the order is closed (cancelled/refunded). */
+  /**
+   * Merchant-side correction of an open order: customer, items, shipping and manual
+   * payment status, applied together (the request runs in one transaction, so a failure
+   * anywhere — e.g. not enough stock for an added line — leaves the order untouched).
+   * Refused once the order is cancelled or refunded.
+   */
   async updateDetails(tenantId: string, id: string, dto: UpdateOrderDto) {
     const order = await this.findOne(tenantId, id);
     if (TERMINAL_ORDER_STATUSES.includes(order.status as OrderStatusValue)) {
       throw new ConflictException(`Order is ${order.status} and can no longer be edited`);
     }
 
-    const { shippingAddress, ...rest } = dto;
-    const updated = await this.prisma.db.order.update({
-      where: { id },
-      data: {
-        ...rest,
-        // Merged over what's stored, so editing one field doesn't wipe the others.
-        ...(shippingAddress
-          ? { shippingAddress: { ...((order.shippingAddress as object | null) ?? {}), ...shippingAddress } }
-          : {}),
-      },
-      include: ORDER_INCLUDE,
-    });
+    const { shippingAddress, items, shippingId, paymentStatus, ...contact } = dto;
+    const data: Record<string, unknown> = { ...contact };
+    const isGateway = order.fulfillmentMethod === 'STRIPE' || order.fulfillmentMethod === 'MERCADOPAGO';
+
+    if (shippingAddress) {
+      // Merged over what's stored, so editing one field doesn't wipe the others.
+      data.shippingAddress = { ...((order.shippingAddress as object | null) ?? {}), ...shippingAddress };
+    }
+
+    if (paymentStatus !== undefined && paymentStatus !== order.paymentStatus) {
+      // A card payment is whatever the gateway reported; letting a human flip it would
+      // desync the books from the money actually received.
+      if (isGateway) throw new ConflictException('Payment status of a card order is set by the payment provider');
+      data.paymentStatus = paymentStatus;
+    }
+
+    let totalsChanged = false;
+    if (items !== undefined || shippingId !== undefined) {
+      const repriced = await this.reprice(tenantId, order, items, shippingId);
+      totalsChanged = repriced.totals.grandTotal !== Number(order.grandTotal);
+      // The charge already happened for this amount; changing it needs a refund and a new order.
+      if (isGateway && order.paymentStatus === 'PAID' && totalsChanged) {
+        throw new ConflictException('This order was paid by card; its items and shipping can no longer change');
+      }
+      Object.assign(data, repriced.totals, repriced.orderFields);
+      if (shippingId === null) data.shippingAddress = Prisma.JsonNull;
+      await this.applyItemChanges(tenantId, order, repriced, (await this.tenantTracksInventory(tenantId)) === true);
+    }
+
+    const updated = await this.prisma.db.order.update({ where: { id }, data: data as any, include: ORDER_INCLUDE });
+
+    // An invoice that already exists would otherwise keep showing the old lines and total.
+    if (totalsChanged && existsSync(getInvoicePath(tenantId, id))) {
+      await this.paymentsService.requeueInvoice(tenantId, id);
+    }
+
     this.orderEvents.emit(tenantId, this.toOrderEvent('order.status_updated', updated));
     return updated;
+  }
+
+  private async tenantTracksInventory(tenantId: string) {
+    return (await this.prisma.db.tenant.findUniqueOrThrow({ where: { id: tenantId } })).tracksInventory;
+  }
+
+  /**
+   * Works out the order's new lines and totals without writing anything. Lines already on
+   * the order keep the unit price and tax rates they were sold at (a later catalogue price
+   * change must not rewrite history); only a new line is priced from the catalogue.
+   */
+  private async reprice(
+    tenantId: string,
+    order: Awaited<ReturnType<OrdersService['findOne']>>,
+    items: OrderItemInputDto[] | undefined,
+    shippingId: string | null | undefined,
+  ) {
+    const keyOf = (productId: string | null, variantId?: string | null) => `${productId}|${variantId ?? ''}`;
+    const existing = new Map(order.items.map((i) => [keyOf(i.productId, i.variantId), i]));
+
+    // Merge repeated lines so the same product can't be listed twice.
+    const wanted = new Map<string, OrderItemInputDto>();
+    for (const item of items ??
+      order.items.map((i) => ({
+        productId: i.productId!,
+        variantId: i.variantId ?? undefined,
+        quantity: i.quantity,
+      }))) {
+      const key = keyOf(item.productId, item.variantId);
+      const seen = wanted.get(key);
+      wanted.set(key, seen ? { ...seen, quantity: seen.quantity + item.quantity } : { ...item });
+    }
+
+    const newKeys = [...wanted.keys()].filter((k) => !existing.has(k));
+    const products = newKeys.length
+      ? await this.prisma.db.product.findMany({
+          where: {
+            id: {
+              in: [...wanted.values()]
+                .filter((w) => newKeys.includes(keyOf(w.productId, w.variantId)))
+                .map((w) => w.productId),
+            },
+            tenantId,
+          },
+          include: { taxes: { include: { tax: true } }, variants: true },
+        })
+      : [];
+    const productMap = new Map(products.map((p) => [p.id, p]));
+
+    const lines = [...wanted.entries()].map(([key, item]) => {
+      const ex = existing.get(key);
+      if (ex) {
+        const rates = ((ex.taxBreakdown as { name: string; rate: number }[] | null) ?? []).map((t) => ({
+          name: t.name,
+          rate: Number(t.rate),
+        }));
+        const priced = priceLineItem(Number(ex.unitPrice), item.quantity, rates);
+        return { key, existing: ex, newLine: null, priced, quantity: item.quantity };
+      }
+      const product = productMap.get(item.productId);
+      if (!product) throw new BadRequestException(`Product ${item.productId} not found`);
+      const variant = item.variantId ? product.variants.find((v) => v.id === item.variantId) : undefined;
+      if (item.variantId && !variant) throw new BadRequestException(`Variant ${item.variantId} not found`);
+      const taxes = product.taxes.map((t) => ({ name: t.tax.name, rate: Number(t.tax.rate) }));
+      const priced = priceLineItem(Number(variant?.price ?? product.price), item.quantity, taxes);
+      return { key, existing: null, newLine: { product, variant }, priced, quantity: item.quantity };
+    });
+
+    const subtotal = round2(lines.reduce((sum, l) => sum.plus(l.priced.lineSubtotal), new Prisma.Decimal(0)));
+    const taxTotal = round2(lines.reduce((sum, l) => sum.plus(l.priced.taxAmount), new Prisma.Decimal(0)));
+
+    // The coupon the customer already redeemed keeps applying, to the new amount. It is not
+    // re-validated (expiry, usage) or re-counted: it was valid when the order was placed.
+    let discountTotal = Number(order.discountTotal);
+    if (order.couponId) {
+      const coupon = await this.prisma.db.coupon.findFirst({ where: { id: order.couponId, tenantId } });
+      if (coupon)
+        discountTotal = applyCouponDiscount(subtotal + taxTotal, coupon.discountType, Number(coupon.discountValue));
+    }
+
+    let shippingTotal = Number(order.shippingTotal);
+    const orderFields: Record<string, unknown> = {};
+    if (shippingId !== undefined) {
+      if (shippingId === null) {
+        shippingTotal = 0;
+        orderFields.shippingId = null;
+      } else {
+        const shipping = await this.prisma.db.shipping.findFirst({ where: { id: shippingId, tenantId } });
+        if (!shipping) throw new BadRequestException('Invalid shipping option');
+        shippingTotal = Number(shipping.cost);
+        orderFields.shippingId = shippingId;
+      }
+    }
+
+    const grandTotal = round2(new Prisma.Decimal(subtotal).plus(taxTotal).minus(discountTotal).plus(shippingTotal));
+    return {
+      lines,
+      removed: order.items.filter((i) => !wanted.has(keyOf(i.productId, i.variantId))),
+      totals: { subtotal, taxTotal, discountTotal, shippingTotal, grandTotal },
+      orderFields,
+    };
+  }
+
+  /** Writes the line changes and moves stock by the difference, never by the whole quantity. */
+  private async applyItemChanges(
+    tenantId: string,
+    order: Awaited<ReturnType<OrdersService['findOne']>>,
+    repriced: Awaited<ReturnType<OrdersService['reprice']>>,
+    tracksInventory: boolean,
+  ) {
+    const toReserve: PricedLine[] = [];
+    const toRelease: { productId: string | null; variantId: string | null; quantity: number }[] = [];
+
+    for (const line of repriced.lines) {
+      const { priced } = line;
+      const row = {
+        quantity: line.quantity,
+        taxAmount: priced.taxAmount,
+        lineTotal: priced.lineTotal,
+        taxBreakdown: priced.taxBreakdown as any,
+      };
+      if (line.existing) {
+        const delta = line.quantity - line.existing.quantity;
+        if (delta === 0) continue;
+        await this.prisma.db.orderItem.update({ where: { id: line.existing.id }, data: row });
+        const { productId, variantId } = line.existing;
+        if (delta > 0) {
+          const stockLine = await this.stockLine(productId, variantId, delta);
+          if (stockLine) toReserve.push(stockLine);
+        } else toRelease.push({ productId, variantId, quantity: -delta });
+      } else if (line.newLine) {
+        const { product, variant } = line.newLine;
+        await this.prisma.db.orderItem.create({
+          data: {
+            tenantId,
+            orderId: order.id,
+            productId: product.id,
+            productName: product.name,
+            variantId: variant?.id,
+            variantName: variant?.name,
+            sku: variant?.sku ?? product.sku,
+            unitPrice: priced.unitPrice,
+            ...row,
+          },
+        });
+        toReserve.push({ product, variant, priced });
+      }
+    }
+
+    for (const item of repriced.removed) {
+      await this.prisma.db.orderItem.delete({ where: { id: item.id } });
+      toRelease.push({ productId: item.productId, variantId: item.variantId, quantity: item.quantity });
+    }
+
+    if (tracksInventory) {
+      await this.reserveStock(toReserve);
+      await this.releaseStock(toRelease);
+    }
+  }
+
+  /**
+   * A stock-reservation entry for a line already on the order, shaped like a freshly priced
+   * one and carrying the live stock so a shortfall is reported with the real numbers.
+   * Null when the product was deleted since: there is no stock left to take from.
+   */
+  private async stockLine(
+    productId: string | null,
+    variantId: string | null,
+    quantity: number,
+  ): Promise<PricedLine | null> {
+    if (variantId) {
+      const variant = await this.prisma.db.productVariant.findFirst({
+        where: { id: variantId },
+        include: { product: true },
+      });
+      if (!variant) return null;
+      return {
+        product: { id: variant.product.id, name: variant.product.name, quantity: variant.product.quantity },
+        variant: { id: variant.id, name: variant.name, quantity: variant.quantity },
+        priced: { quantity },
+      };
+    }
+    if (!productId) return null;
+    const product = await this.prisma.db.product.findFirst({ where: { id: productId } });
+    if (!product) return null;
+    return { product: { id: product.id, name: product.name, quantity: product.quantity }, priced: { quantity } };
   }
 
   /**

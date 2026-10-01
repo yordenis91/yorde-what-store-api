@@ -232,6 +232,11 @@ export class PaymentsService {
     }
   }
 
+  /** Re-renders an order's PDF invoice, for when its totals changed after it was generated. */
+  async requeueInvoice(tenantId: string, orderId: string) {
+    await this.invoiceQueue.add('generate-invoice', { tenantId, orderId });
+  }
+
   /** Rejects placing a Zelle order at all if the store never set up a recipient account — otherwise a customer would see payment instructions for an account that doesn't exist. */
   async assertZelleConfigured(tenantId: string) {
     const config = await this.tenantsService.getDecryptedCredentials(tenantId, 'ZELLE');
