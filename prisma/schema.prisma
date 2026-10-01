@@ -635,21 +635,24 @@ model ProductTax {
 }
 
 model Product {
-  id          String   @id @default(uuid()) @db.Uuid
-  tenantId    String   @map("tenant_id") @db.Uuid
-  name        String
-  sku         String?
-  description String?  @db.Text
-  price       Decimal  @db.Decimal(12, 2)
-  cost        Decimal? @db.Decimal(12, 2)
-  quantity    Int      @default(0)
-  hasVariants Boolean  @default(false) @map("has_variants")
-  isActive    Boolean  @default(true) @map("is_active")
-  isPublished Boolean  @default(true) @map("is_published")
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @map("tenant_id") @db.Uuid
+  name           String
+  sku            String?
+  description    String?  @db.Text
+  price          Decimal  @db.Decimal(12, 2)
+  /// "Before" price shown struck through next to `price` as a discount. Display only:
+  /// orders are always priced from `price`, so quotes, taxes and coupons are untouched.
+  compareAtPrice Decimal? @map("compare_at_price") @db.Decimal(12, 2)
+  cost           Decimal? @db.Decimal(12, 2)
+  quantity       Int      @default(0)
+  hasVariants    Boolean  @default(false) @map("has_variants")
+  isActive       Boolean  @default(true) @map("is_active")
+  isPublished    Boolean  @default(true) @map("is_published")
   /// Free-form extra attributes (color, size charts, custom fields) kept as JSONB.
-  attributes  Json     @default("{}")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  attributes     Json     @default("{}")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
   tenant     Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   categories ProductCategoryOnProduct[]

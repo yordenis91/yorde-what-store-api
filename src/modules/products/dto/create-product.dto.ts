@@ -55,6 +55,12 @@ export class CreateProductDto {
   @Min(0)
   price: number;
 
+  /** Previous price, shown struck through when it is higher than `price`. Send null to remove the discount. */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  compareAtPrice?: number | null;
+
   @IsOptional()
   @IsNumber()
   @Min(0)
