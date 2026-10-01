@@ -5,6 +5,7 @@ import {
   Get,
   MessageEvent,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -53,6 +54,12 @@ export class StorefrontOrdersController {
   @Post('quote')
   quote(@CurrentTenantId() tenantId: string, @Body() dto: QuoteOrderDto) {
     return this.ordersService.quote(tenantId, dto);
+  }
+
+  /** Invoice-style order page for the customer, reachable from the confirmation page and kept as a link. */
+  @Get(':id/public')
+  findPublic(@CurrentTenantId() tenantId: string, @Param('id', ParseUUIDPipe) id: string) {
+    return this.ordersService.findPublic(tenantId, id);
   }
 
   /**

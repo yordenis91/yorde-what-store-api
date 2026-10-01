@@ -780,3 +780,49 @@ describe('OrdersService Zelle payments', () => {
     });
   });
 });
+
+describe('OrdersService.findPublic', () => {
+  const stored = {
+    id: 'order-1',
+    orderNumber: 'ORD-1',
+    status: 'PENDING',
+    paymentStatus: 'PENDING',
+    fulfillmentMethod: 'ZELLE',
+    currency: 'USD',
+    customerName: 'Ana',
+    // Internal fields that must never reach the public invoice page.
+    paymentProofUrl: '/uploads/t/proof.webp',
+    paymentReference: 'CONF-1',
+    stripePaymentIntentId: 'pi_secret',
+    fulfillmentMessage: 'internal notification text',
+    tenantId: TENANT_ID,
+    shipping: null,
+    items: [
+      {
+        id: 'i1',
+        productName: 'Shirt',
+        quantity: 2,
+        unitPrice: '25',
+        taxAmount: '0',
+        lineTotal: '50',
+        productId: 'p1',
+      },
+    ],
+  };
+
+  it('returns the invoice fields and leaves out anything internal', async () => {
+    const service = await buildService(createPrismaDouble({ order: stored }));
+
+    const result = await service.findPublic(TENANT_ID, 'order-1');
+
+    expect(result.orderNumber).toBe('ORD-1');
+    expect(result.items).toHaveLength(1);
+    expect(JSON.stringify(result)).not.toMatch(/proof|CONF-1|pi_secret|internal notification|tenantId|productId/);
+  });
+
+  it('404s for an order that is not in this store', async () => {
+    const service = await buildService(createPrismaDouble({}));
+
+    await expect(service.findPublic(TENANT_ID, 'nope')).rejects.toThrow(NotFoundException);
+  });
+});

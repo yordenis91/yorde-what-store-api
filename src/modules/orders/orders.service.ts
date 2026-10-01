@@ -180,6 +180,49 @@ export class OrdersService {
     return updated;
   }
 
+  /**
+   * The customer-facing invoice page. The order id is a random UUID, so the link
+   * itself is the credential (same trust level as the confirmation page they just
+   * landed on) — which is why this returns only what an invoice shows and leaves
+   * out everything internal: payment proof, gateway ids, the notification text.
+   */
+  async findPublic(tenantId: string, orderId: string) {
+    const order = await this.prisma.db.order.findFirst({
+      where: { id: orderId, tenantId },
+      include: { items: true, shipping: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+
+    return {
+      id: order.id,
+      orderNumber: order.orderNumber,
+      status: order.status,
+      paymentStatus: order.paymentStatus,
+      fulfillmentMethod: order.fulfillmentMethod,
+      currency: order.currency,
+      createdAt: order.createdAt,
+      customerName: order.customerName,
+      customerEmail: order.customerEmail,
+      customerPhone: order.customerPhone,
+      shippingAddress: order.shippingAddress,
+      shipping: order.shipping ? { name: order.shipping.name, cost: order.shipping.cost } : null,
+      subtotal: order.subtotal,
+      taxTotal: order.taxTotal,
+      discountTotal: order.discountTotal,
+      shippingTotal: order.shippingTotal,
+      grandTotal: order.grandTotal,
+      items: order.items.map((i) => ({
+        id: i.id,
+        productName: i.productName,
+        variantName: i.variantName,
+        quantity: i.quantity,
+        unitPrice: i.unitPrice,
+        taxAmount: i.taxAmount,
+        lineTotal: i.lineTotal,
+      })),
+    };
+  }
+
   confirmZellePayment(tenantId: string, orderId: string) {
     return this.paymentsService.confirmManualPayment(tenantId, orderId);
   }
