@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   MessageEvent,
   Param,
@@ -35,6 +36,7 @@ import {
   PaymentProofDto,
   PaymentProofImageDto,
   QuoteOrderDto,
+  UpdateOrderDto,
 } from './dto';
 
 @ApiTags('storefront-orders')
@@ -148,6 +150,19 @@ export class OrdersController {
   @Get(':id')
   findOne(@CurrentTenantId() tenantId: string, @Param('id') id: string) {
     return this.ordersService.findOne(tenantId, id);
+  }
+
+  @Audit({ action: 'order.update', entityType: 'Order' })
+  @Patch(':id')
+  update(@CurrentTenantId() tenantId: string, @Param('id') id: string, @Body() dto: UpdateOrderDto) {
+    return this.ordersService.updateDetails(tenantId, id, dto);
+  }
+
+  /** Soft delete: hides the order from the list, the row stays in the database. */
+  @Audit({ action: 'order.hide', entityType: 'Order' })
+  @Delete(':id')
+  remove(@CurrentTenantId() tenantId: string, @Param('id') id: string) {
+    return this.ordersService.hide(tenantId, id);
   }
 
   @Audit({ action: 'order.status_update', entityType: 'Order' })

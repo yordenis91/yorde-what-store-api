@@ -35,7 +35,9 @@ export class DashboardService {
         select: { createdAt: true, grandTotal: true },
       }),
       this.prisma.db.order.findMany({
-        where: { tenantId },
+        // A list the merchant reads, so orders they deleted from the Orders page stay out of
+        // it; every total above still counts them (the sale happened).
+        where: { tenantId, hiddenAt: null },
         orderBy: { createdAt: 'desc' },
         take: 5,
         select: { id: true, orderNumber: true, customerName: true, status: true, grandTotal: true, createdAt: true },

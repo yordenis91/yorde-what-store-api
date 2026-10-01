@@ -52,12 +52,14 @@ export class UpdateCouponDto {
   @Transform(emptyToUndefined)
   @IsInt()
   @Min(1)
-  usageLimit?: number;
+  /** null removes the limit. */
+  usageLimit?: number | null;
 
   @IsOptional()
   @Transform(emptyToUndefined)
   @IsDateString()
-  expiresAt?: string;
+  /** null removes the expiry date. */
+  expiresAt?: string | null;
 
   @IsOptional()
   @IsBoolean()

@@ -56,7 +56,7 @@ export class CouponsService {
       where: { id },
       data: {
         ...dto,
-        expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : undefined,
+        expiresAt: dto.expiresAt === null ? null : dto.expiresAt ? new Date(dto.expiresAt) : undefined,
       },
     });
   }

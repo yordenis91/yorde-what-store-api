@@ -7,7 +7,14 @@ import { Queue } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PaginatedResult } from '../../common/dto/pagination.dto';
 import { toCsv } from '../../common/utils/csv.util';
-import { CreateOrderDto, OrderItemInputDto, OrderQueryDto, PaymentProofDto, QuoteOrderDto } from './dto';
+import {
+  CreateOrderDto,
+  OrderItemInputDto,
+  OrderQueryDto,
+  PaymentProofDto,
+  QuoteOrderDto,
+  UpdateOrderDto,
+} from './dto';
 import { applyCouponDiscount, priceLineItem, round2 } from './pricing.util';
 import { buildWhatsappUrl, renderItemLine, renderOrderMessage } from './fulfillment/message-renderer';
 import { EMAIL_JOB_OPTIONS, EMAIL_QUEUE, ORDER_NOTIFICATION_QUEUE } from '../../queue/queue.constants';
@@ -32,6 +39,9 @@ type OrderStatusValue = 'PENDING' | 'CONFIRMED' | 'PROCESSING' | 'COMPLETED' | '
  * same call, never a route back into an active state.
  */
 const TERMINAL_ORDER_STATUSES: OrderStatusValue[] = ['CANCELLED', 'REFUNDED'];
+
+/** Orders with nothing left to resolve, so the merchant can clear them from the list. */
+const HIDEABLE_ORDER_STATUSES: OrderStatusValue[] = ['COMPLETED', 'CANCELLED', 'REFUNDED'];
 
 /** The parts of a priced line that stock handling needs. */
 interface PricedLine {
@@ -478,7 +488,8 @@ export class OrdersService {
         include: ORDER_INCLUDE,
         skip: query.skip,
         take: query.limit,
-        orderBy: { createdAt: 'desc' },
+        // `id` as the tie-breaker keeps pages stable when many rows share a value.
+        orderBy: [{ [query.sortBy ?? 'createdAt']: query.sortDir ?? 'desc' }, { id: 'desc' }],
       }),
       this.prisma.db.order.count({ where }),
     ]);
@@ -539,6 +550,7 @@ export class OrdersService {
   private buildFilterWhere(tenantId: string, query: Pick<OrderQueryDto, 'search' | 'status' | 'dateFrom' | 'dateTo'>) {
     return {
       tenantId,
+      hiddenAt: null,
       ...(query.search
         ? {
             OR: [
@@ -606,6 +618,43 @@ export class OrdersService {
     const updated = await this.prisma.db.order.update({ where: { id }, data: data as any });
     this.orderEvents.emit(tenantId, this.toOrderEvent('order.status_updated', updated));
     return updated;
+  }
+
+  /** Corrects who an order is for and where it goes. Refused once the order is closed (cancelled/refunded). */
+  async updateDetails(tenantId: string, id: string, dto: UpdateOrderDto) {
+    const order = await this.findOne(tenantId, id);
+    if (TERMINAL_ORDER_STATUSES.includes(order.status as OrderStatusValue)) {
+      throw new ConflictException(`Order is ${order.status} and can no longer be edited`);
+    }
+
+    const { shippingAddress, ...rest } = dto;
+    const updated = await this.prisma.db.order.update({
+      where: { id },
+      data: {
+        ...rest,
+        // Merged over what's stored, so editing one field doesn't wipe the others.
+        ...(shippingAddress
+          ? { shippingAddress: { ...((order.shippingAddress as object | null) ?? {}), ...shippingAddress } }
+          : {}),
+      },
+      include: ORDER_INCLUDE,
+    });
+    this.orderEvents.emit(tenantId, this.toOrderEvent('order.status_updated', updated));
+    return updated;
+  }
+
+  /**
+   * "Delete" from the merchant's point of view: hides the order from the list, nothing
+   * is removed. Limited to finished orders — hiding a live one would leave its reserved
+   * stock and pending payment with no way left in the UI to resolve them.
+   */
+  async hide(tenantId: string, id: string) {
+    const order = await this.findOne(tenantId, id);
+    if (!HIDEABLE_ORDER_STATUSES.includes(order.status as OrderStatusValue)) {
+      throw new ConflictException('Only completed, cancelled or refunded orders can be deleted');
+    }
+    await this.prisma.db.order.update({ where: { id }, data: { hiddenAt: new Date() } });
+    return { hidden: true };
   }
 
   private generateOrderNumber(): string {

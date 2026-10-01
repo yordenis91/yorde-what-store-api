@@ -814,7 +814,10 @@ model Order {
   couponId   String? @map("coupon_id") @db.Uuid
   shippingId String? @map("shipping_id") @db.Uuid
 
-  shippingAddress Json? @map("shipping_address")
+  shippingAddress Json?     @map("shipping_address")
+  /// Set when the merchant "deletes" the order from the list. Only hides it there (and from
+  /// the CSV export): the sale happened, so dashboards and customer totals still count it.
+  hiddenAt        DateTime? @map("hidden_at")
 
   /// Rendered WhatsApp/Telegram message for this order (audit trail of what was sent).
   fulfillmentMessage String? @map("fulfillment_message") @db.Text

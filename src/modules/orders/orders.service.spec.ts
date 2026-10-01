@@ -3,7 +3,10 @@ import { Test } from '@nestjs/testing';
 import { getQueueToken } from '@nestjs/bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EMAIL_QUEUE, ORDER_NOTIFICATION_QUEUE } from '../../queue/queue.constants';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import { OrdersService } from './orders.service';
+import { OrderQueryDto } from './dto';
 import { OrderEvent, OrderEventsService } from './order-events.service';
 import { PaymentsService } from '../payments/payments.service';
 
@@ -825,4 +828,80 @@ describe('OrdersService.findPublic', () => {
 
     await expect(service.findPublic(TENANT_ID, 'nope')).rejects.toThrow(NotFoundException);
   });
+});
+
+describe('OrdersService listing order and soft delete', () => {
+  const live = {
+    id: 'order-1',
+    status: 'PENDING',
+    items: [],
+    shippingAddress: { line1: 'Old 1', city: 'Springfield' },
+  };
+
+  it('sorts by the requested column and always excludes hidden orders', async () => {
+    const double = createPrismaDouble({});
+    const service = await buildService(double);
+    const query = Object.assign(new OrderQueryDto(), { sortBy: 'grandTotal', sortDir: 'asc' });
+
+    await service.findAll(TENANT_ID, query);
+
+    const args = double.db.order.findMany.mock.calls[0][0];
+    expect(args.orderBy).toEqual([{ grandTotal: 'asc' }, { id: 'desc' }]);
+    expect(args.where).toMatchObject({ tenantId: TENANT_ID, hiddenAt: null });
+  });
+
+  it('keeps newest-first as the default order', async () => {
+    const double = createPrismaDouble({});
+    const service = await buildService(double);
+
+    await service.findAll(TENANT_ID, new OrderQueryDto());
+
+    expect(double.db.order.findMany.mock.calls[0][0].orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
+  });
+
+  it('only accepts whitelisted sort columns', async () => {
+    const dto = plainToInstance(OrderQueryDto, { sortBy: 'tenantId; DROP TABLE orders' });
+    const errors = await validate(dto);
+
+    expect(errors.some((e) => e.property === 'sortBy')).toBe(true);
+  });
+
+  it('edits contact details and merges the address instead of replacing it', async () => {
+    const double = createPrismaDouble({ order: live });
+    const service = await buildService(double);
+
+    await service.updateDetails(TENANT_ID, 'order-1', { customerName: 'Ana B', shippingAddress: { line1: 'New 2' } });
+
+    const data = double.db.order.update.mock.calls[0][0].data;
+    expect(data.customerName).toBe('Ana B');
+    expect(data.shippingAddress).toEqual({ line1: 'New 2', city: 'Springfield' });
+  });
+
+  it.each(['CANCELLED', 'REFUNDED'])('refuses to edit a %s order', async (status) => {
+    const service = await buildService(createPrismaDouble({ order: { ...live, status } }));
+
+    await expect(service.updateDetails(TENANT_ID, 'order-1', { customerName: 'X Y' })).rejects.toThrow(
+      ConflictException,
+    );
+  });
+
+  it.each(['COMPLETED', 'CANCELLED', 'REFUNDED'])('hides a %s order without deleting it', async (status) => {
+    const double = createPrismaDouble({ order: { ...live, status } });
+    const service = await buildService(double);
+
+    await expect(service.hide(TENANT_ID, 'order-1')).resolves.toEqual({ hidden: true });
+
+    expect(double.db.order.update.mock.calls[0][0].data).toEqual({ hiddenAt: expect.any(Date) });
+  });
+
+  it.each(['PENDING', 'CONFIRMED', 'PROCESSING'])(
+    'will not hide a %s order that still needs attention',
+    async (status) => {
+      const double = createPrismaDouble({ order: { ...live, status } });
+      const service = await buildService(double);
+
+      await expect(service.hide(TENANT_ID, 'order-1')).rejects.toThrow(ConflictException);
+      expect(double.db.order.update).not.toHaveBeenCalled();
+    },
+  );
 });
