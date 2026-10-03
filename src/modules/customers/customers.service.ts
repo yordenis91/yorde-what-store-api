@@ -187,8 +187,9 @@ export class CustomersService {
    * row and their own Orders carry directly (name/email/phone/address), but
    * keeps the orders themselves and their financial totals: those are the
    * Merchant's own accounting/tax records, not the customer's to erase.
-   * Also revokes any live refresh tokens so an anonymized account can't stay
-   * logged in.
+   * Also revokes any live refresh tokens — web and mobile alike, they live in
+   * separate tables — so an anonymized account can't stay logged in on any
+   * device.
    */
   async anonymize(tenantId: string, customerId: string) {
     const customer = await this.prisma.db.customer.findFirst({ where: { id: customerId, tenantId } });
@@ -208,6 +209,10 @@ export class CustomersService {
       },
     });
     await this.prisma.db.customerRefreshToken.updateMany({
+      where: { customerId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    await this.prisma.db.mobileCustomerRefreshToken.updateMany({
       where: { customerId, revokedAt: null },
       data: { revokedAt: new Date() },
     });

@@ -35,6 +35,9 @@ function createPrismaDouble(options: {
       findMany: jest.fn().mockResolvedValue(options.orders ?? []),
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
+    mobileCustomerRefreshToken: {
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
     customerRefreshToken: {
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
@@ -227,6 +230,18 @@ describe('CustomersService.anonymize', () => {
     await service.anonymize(TENANT_ID, 'c1');
 
     expect(double.db.customerRefreshToken.updateMany).toHaveBeenCalledWith({
+      where: { customerId: 'c1', revokedAt: null },
+      data: { revokedAt: expect.any(Date) },
+    });
+  });
+
+  it('also revokes the mobile apps\' refresh tokens, which live in their own table', async () => {
+    const double = createPrismaDouble({ customers: [{ id: 'c1', name: 'Ana' }] });
+    const service = await buildService(double);
+
+    await service.anonymize(TENANT_ID, 'c1');
+
+    expect(double.db.mobileCustomerRefreshToken.updateMany).toHaveBeenCalledWith({
       where: { customerId: 'c1', revokedAt: null },
       data: { revokedAt: expect.any(Date) },
     });
