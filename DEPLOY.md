@@ -43,6 +43,12 @@ Todas las de `.env.example`. Tres merecen atención especial en producción:
   contraseñas.
 - **`CORS_ORIGINS`** — si queda vacía, la API **refleja cualquier origen** con
   credenciales activadas (`src/main.ts:31`). Defínela siempre en producción.
+- **`PUBLIC_WEB_URL`** — la URL pública de la web (p. ej.
+  `https://tudominio.com`). La API arma con ella todos los enlaces que manda
+  por email (restablecer contraseña, invitaciones de staff), nunca con la
+  cabecera `Origin` de la petición, que cualquiera puede falsear. Si no está,
+  usa la primera entrada de `CORS_ORIGINS`. Un valor que no sea una URL
+  http(s) absoluta impide arrancar.
 - **`NODE_ENV=production`** — activa el flag `secure` en la cookie de refresh
   (`src/modules/auth/auth.controller.ts:109`), que exige HTTPS.
 - **`SMTP_HOST`** — si queda vacía, el worker de correo (`src/queue/processors/email.processor.ts`)

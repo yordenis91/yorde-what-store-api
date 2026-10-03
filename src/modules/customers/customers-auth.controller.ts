@@ -96,9 +96,8 @@ export class CustomersAuthController {
 
   @Throttle(AUTH_THROTTLE)
   @Post('forgot-password')
-  forgotPassword(@CurrentTenantId() tenantId: string, @Body() dto: ForgotPasswordCustomerDto, @Req() req: Request) {
-    const origin = req.headers.origin ?? (req.headers.referer ? new URL(req.headers.referer).origin : undefined);
-    return this.authService.forgotPassword(tenantId, dto, origin);
+  forgotPassword(@CurrentTenantId() tenantId: string, @Body() dto: ForgotPasswordCustomerDto) {
+    return this.authService.forgotPassword(tenantId, dto);
   }
 
   @Throttle(AUTH_THROTTLE)

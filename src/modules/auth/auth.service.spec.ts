@@ -79,7 +79,13 @@ function buildService(overrides: {
 
   const config = {
     get: (key: string) =>
-      ({ 'jwt.refreshSecret': 's', 'jwt.secret': 's', 'jwt.expiresIn': '15m', 'jwt.refreshExpiresIn': '30d' })[key],
+      ({
+        'jwt.refreshSecret': 's',
+        'jwt.secret': 's',
+        'jwt.expiresIn': '15m',
+        'jwt.refreshExpiresIn': '30d',
+        'app.publicWebUrl': 'https://admin.example.com',
+      })[key],
   } as unknown as ConfigService;
 
   const emailQueue = { add: jest.fn().mockResolvedValue({}) };
@@ -218,7 +224,7 @@ describe('AuthService.forgotPassword', () => {
       tenant: { id: 'tenant-a', name: 'Acme', locale: 'es' },
     });
 
-    await service.forgotPassword({ email: USER.email }, 'https://admin.example.com');
+    await service.forgotPassword({ email: USER.email });
 
     expect(resetTokenCreate).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ userId: USER.id }) }),

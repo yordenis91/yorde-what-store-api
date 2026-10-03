@@ -17,6 +17,7 @@ import {
   ResetPasswordCustomerDto,
   MobileRefreshCustomerDto,
 } from './dto';
+import { storefrontPasswordLink } from '../../common/utils/public-links';
 
 const BCRYPT_ROUNDS = 12;
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1h
@@ -153,12 +154,11 @@ export class CustomersAuthService {
 
   /**
    * Always returns the same shape whether or not the email exists, to avoid
-   * leaking which emails are registered. `origin` is the storefront page's
-   * own origin (read from the request by the controller) — used to build a
-   * clickable reset link without the backend needing to know the tenant's
-   * subdomain/custom-domain routing itself.
+   * leaking which emails are registered. The reset link is built from the
+   * configured public web URL, never from the request's Origin — see
+   * common/utils/public-links.ts for why (password reset poisoning).
    */
-  async forgotPassword(tenantId: string, dto: ForgotPasswordCustomerDto, origin?: string) {
+  async forgotPassword(tenantId: string, dto: ForgotPasswordCustomerDto) {
     const customer = await this.prisma.db.customer.findUnique({
       where: { tenantId_email: { tenantId, email: dto.email } },
     });
@@ -166,7 +166,7 @@ export class CustomersAuthService {
     if (customer?.email) {
       const tenant = await this.prisma.db.tenant.findUniqueOrThrow({
         where: { id: tenantId },
-        select: { name: true, locale: true },
+        select: { name: true, slug: true, locale: true },
       });
       const rawToken = randomBytes(32).toString('hex');
       await this.prisma.db.customerPasswordResetToken.create({
@@ -187,7 +187,11 @@ export class CustomersAuthService {
           variables: {
             name: customer.name,
             store_name: tenant.name,
-            reset_link: `${origin ?? ''}/login?token=${rawToken}`,
+            reset_link: storefrontPasswordLink(
+              this.config.get<string | null>('app.publicWebUrl') ?? null,
+              tenant.slug,
+              rawToken,
+            ),
           },
         } satisfies EmailJobData,
         EMAIL_JOB_OPTIONS,

@@ -115,9 +115,8 @@ export class PlatformTenantsController {
   @Audit({ action: 'tenant.owner-password-reset', entityType: 'Tenant' })
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post(':id/send-password-reset')
-  sendOwnerPasswordReset(@Param('id') id: string, @Req() req: Request) {
-    const origin = req.headers.origin ?? (req.headers.referer ? new URL(req.headers.referer).origin : undefined);
-    return this.tenantsService.sendOwnerPasswordReset(id, origin);
+  sendOwnerPasswordReset(@Param('id') id: string) {
+    return this.tenantsService.sendOwnerPasswordReset(id);
   }
 
   @ApiOperation({ summary: "Paginated roster of a tenant's team members (owner + staff)" })

@@ -57,4 +57,18 @@ describe('validateEnv', () => {
       expect(() => validateEnv({ ...VALID_ENV })).not.toThrow();
     });
   });
+
+  describe('PUBLIC_WEB_URL', () => {
+    it('passes when unset (links fall back to the first CORS origin)', () => {
+      expect(() => validateEnv({ ...VALID_ENV })).not.toThrow();
+    });
+
+    it('passes with an absolute http(s) URL', () => {
+      expect(() => validateEnv({ ...VALID_ENV, PUBLIC_WEB_URL: 'https://yws.example.com' })).not.toThrow();
+    });
+
+    it('throws on a value that is not an absolute http(s) URL, instead of emailing broken links', () => {
+      expect(() => validateEnv({ ...VALID_ENV, PUBLIC_WEB_URL: 'yws.example.com' })).toThrow(/PUBLIC_WEB_URL/);
+    });
+  });
 });

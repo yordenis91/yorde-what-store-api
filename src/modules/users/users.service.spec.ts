@@ -1,3 +1,4 @@
+import { ConfigService } from '@nestjs/config';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UsersService } from './users.service';
@@ -55,7 +56,8 @@ function buildService(
   } as unknown as PrismaService;
 
   const emailQueue = { add: jest.fn().mockResolvedValue({}) };
-  const service = new UsersService(prisma, emailQueue as any);
+  const config = { get: (key: string) => (key === 'app.publicWebUrl' ? 'https://admin.example.com' : undefined) };
+  const service = new UsersService(prisma, emailQueue as any, config as unknown as ConfigService);
   return {
     service,
     findMany,
@@ -204,7 +206,7 @@ describe('UsersService.resetMemberPassword', () => {
       ],
     });
 
-    const result = await service.resetMemberPassword(TENANT_A, 'm1', 'https://admin.example.com');
+    const result = await service.resetMemberPassword(TENANT_A, 'm1');
 
     expect(result).toEqual({ sent: true });
     expect(resetTokenCreate).toHaveBeenCalledWith(
@@ -229,7 +231,7 @@ describe('UsersService.resetMemberPassword', () => {
       members: [{ id: 'm-other', tenantId: 'tenant-b', role: 'STAFF', user: { email: 'x@x.com', name: 'X' } }],
     });
 
-    await expect(service.resetMemberPassword(TENANT_A, 'm-other', undefined)).rejects.toThrow(NotFoundException);
+    await expect(service.resetMemberPassword(TENANT_A, 'm-other')).rejects.toThrow(NotFoundException);
     expect(emailQueue.add).not.toHaveBeenCalled();
   });
 
@@ -238,7 +240,7 @@ describe('UsersService.resetMemberPassword', () => {
       members: [{ id: 'm-owner', tenantId: TENANT_A, role: 'OWNER', user: { email: 'owner@x.com', name: 'Owner' } }],
     });
 
-    await expect(service.resetMemberPassword(TENANT_A, 'm-owner', undefined)).rejects.toThrow(ConflictException);
+    await expect(service.resetMemberPassword(TENANT_A, 'm-owner')).rejects.toThrow(ConflictException);
     expect(emailQueue.add).not.toHaveBeenCalled();
   });
 });

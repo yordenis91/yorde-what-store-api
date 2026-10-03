@@ -22,6 +22,7 @@ import {
   ResetPasswordDto,
   MobileRefreshDto,
 } from './dto';
+import { staffPasswordLink } from '../../common/utils/public-links';
 
 const BCRYPT_ROUNDS = 12;
 
@@ -332,7 +333,7 @@ export class AuthService {
    * the email and which tenant's SMTP config the queue worker tries first —
    * the token itself authenticates the User, not any one tenant.
    */
-  async forgotPassword(dto: ForgotPasswordDto, origin?: string) {
+  async forgotPassword(dto: ForgotPasswordDto) {
     const user = await this.client.user.findUnique({ where: { email: dto.email } });
     if (user?.isActive) {
       const membership = await this.client.tenantMember.findFirst({
@@ -355,7 +356,7 @@ export class AuthService {
             variables: {
               name: user.name,
               store_name: tenant.name,
-              reset_link: `${origin ?? ''}/login?token=${rawToken}`,
+              reset_link: staffPasswordLink(this.config.get<string | null>('app.publicWebUrl') ?? null, rawToken),
             },
           } satisfies EmailJobData,
           EMAIL_JOB_OPTIONS,

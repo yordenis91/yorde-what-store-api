@@ -83,7 +83,9 @@ function buildService(overrides: { tenant?: Record<string, unknown> | null } = {
   } as unknown as PrismaService;
 
   const jwt = { sign: jest.fn().mockReturnValue('signed.jwt.token') } as unknown as JwtService;
-  const config = { get: () => 'secret' } as unknown as ConfigService;
+  const config = {
+    get: (key: string) => (key === 'app.publicWebUrl' ? 'https://admin.example.com' : 'secret'),
+  } as unknown as ConfigService;
 
   const resetTokenCreate = jest.fn().mockResolvedValue({});
   (prisma as any).passwordResetToken = { create: resetTokenCreate };
@@ -277,7 +279,7 @@ describe('PlatformTenantsService.sendOwnerPasswordReset', () => {
       },
     });
 
-    const result = await service.sendOwnerPasswordReset(TENANT_ID, 'https://admin.example.com');
+    const result = await service.sendOwnerPasswordReset(TENANT_ID);
 
     expect(result).toEqual({ sent: true });
     expect(resetTokenCreate).toHaveBeenCalledWith(

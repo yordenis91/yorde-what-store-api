@@ -27,6 +27,7 @@ import {
   TenantAdminQueryDto,
   UpdateTenantAdminDto,
 } from './dto';
+import { staffPasswordLink } from '../../../common/utils/public-links';
 
 const BCRYPT_ROUNDS = 12;
 const IMPERSONATION_TTL_MINUTES = 30;
@@ -393,7 +394,7 @@ export class PlatformTenantsService {
    * self-service would, via the same token machinery — the Super Admin
    * never sees or sets the new password themselves.
    */
-  async sendOwnerPasswordReset(id: string, origin?: string) {
+  async sendOwnerPasswordReset(id: string) {
     const tenant = await this.findActiveOrThrow(id, { owner: { select: { id: true, email: true, name: true } } });
     const rawToken = await issuePasswordResetToken(this.prisma, tenant.owner.id);
     await this.emailQueue.add(
@@ -406,7 +407,7 @@ export class PlatformTenantsService {
         variables: {
           name: tenant.owner.name,
           store_name: tenant.name,
-          reset_link: `${origin ?? ''}/login?token=${rawToken}`,
+          reset_link: staffPasswordLink(this.config.get<string | null>('app.publicWebUrl') ?? null, rawToken),
         },
       } satisfies EmailJobData,
       EMAIL_JOB_OPTIONS,

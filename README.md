@@ -285,6 +285,7 @@ copy it to `.env` and fill in real secrets before running anything beyond
 | `PORT` | `3000` | |
 | `API_PREFIX` | `api/v1` | |
 | `CORS_ORIGINS` | *(empty)* | Comma-separated allow-list. **Empty reflects any origin with credentials — set this explicitly in production.** |
+| `PUBLIC_WEB_URL` | first `CORS_ORIGINS` entry | Public web URL that emailed links (password resets, invites) are built from — never the request's `Origin`. Must be an absolute http(s) URL or the app refuses to boot. |
 | **Database** | | |
 | `DATABASE_URL` | — | Required. |
 | **Redis** | | |

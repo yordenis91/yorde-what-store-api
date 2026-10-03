@@ -1,3 +1,5 @@
+import { isHttpUrl } from '../common/utils/public-links';
+
 /**
  * Fails the boot instead of letting the app come up "healthy" with a secret
  * silently undefined — the failure mode this replaces was discovered during
@@ -37,6 +39,15 @@ export function validateEnv(config: Record<string, unknown>): Record<string, unk
   if (config.NODE_ENV === 'production' && corsOriginsEmpty) {
     throw new Error(
       'CORS_ORIGINS is required when NODE_ENV=production — an unset or empty value means any origin is allowed with credentials. Set it to a comma-separated allowlist.',
+    );
+  }
+
+  // Email links are built from this (see common/utils/public-links.ts), so a
+  // typo must stop the boot rather than ship broken password-reset emails.
+  const publicWebUrl = config.PUBLIC_WEB_URL;
+  if (typeof publicWebUrl === 'string' && publicWebUrl.trim() !== '' && !isHttpUrl(publicWebUrl.trim())) {
+    throw new Error(
+      `PUBLIC_WEB_URL must be an absolute http(s) URL (e.g. https://tudominio.com), got "${publicWebUrl}".`,
     );
   }
 

@@ -82,9 +82,8 @@ export class AuthController {
   @Public()
   @Throttle(AUTH_THROTTLE)
   @Post('forgot-password')
-  forgotPassword(@Body() dto: ForgotPasswordDto, @Req() req: Request) {
-    const origin = req.headers.origin ?? (req.headers.referer ? new URL(req.headers.referer).origin : undefined);
-    return this.authService.forgotPassword(dto, origin);
+  forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(dto);
   }
 
   @Public()

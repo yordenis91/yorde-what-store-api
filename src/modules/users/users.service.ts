@@ -1,4 +1,5 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EMAIL_JOB_OPTIONS, EMAIL_QUEUE } from '../../queue/queue.constants';
@@ -7,6 +8,7 @@ import { Queue } from 'bullmq';
 import { EmailJobData } from '../../queue/processors/email.processor';
 import { issuePasswordResetToken } from '../auth/password-reset.util';
 import { InviteStaffDto, UpdateMemberDto } from './dto';
+import { staffPasswordLink } from '../../common/utils/public-links';
 
 const BCRYPT_ROUNDS = 12;
 
@@ -15,6 +17,7 @@ export class UsersService {
   constructor(
     private readonly prisma: PrismaService,
     @InjectQueue(EMAIL_QUEUE) private readonly emailQueue: Queue,
+    private readonly config: ConfigService,
   ) {}
 
   async listMembers(tenantId: string) {
@@ -95,7 +98,7 @@ export class UsersService {
    * Reuses the same token/email machinery as the self-service forgot-password
    * flow (AuthService.forgotPassword) — see password-reset.util.ts.
    */
-  async resetMemberPassword(tenantId: string, memberId: string, origin?: string) {
+  async resetMemberPassword(tenantId: string, memberId: string) {
     const member = await this.prisma.tenantMember.findFirst({
       where: { id: memberId, tenantId },
       include: { user: true },
@@ -118,7 +121,7 @@ export class UsersService {
         variables: {
           name: member.user.name,
           store_name: tenant.name,
-          reset_link: `${origin ?? ''}/login?token=${rawToken}`,
+          reset_link: staffPasswordLink(this.config.get<string | null>('app.publicWebUrl') ?? null, rawToken),
         },
       } satisfies EmailJobData,
       EMAIL_JOB_OPTIONS,
