@@ -3,6 +3,14 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { DashboardRange } from './dto/dashboard-query.dto';
 import { buildDayBuckets, dayKey, rangeDays, rangeStart } from '../../common/utils/date-range-buckets.util';
 
+/**
+ * Orders that never turned into a sale (cancelled) or gave the money back
+ * (refunded). They stay in the order counts, but not in anything that reads
+ * as sales: period revenue, the revenue chart, the average order value, top
+ * products and coupon discounts.
+ */
+const NOT_A_SALE = { notIn: ['CANCELLED', 'REFUNDED'] as ('CANCELLED' | 'REFUNDED')[] };
+
 @Injectable()
 export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
@@ -31,7 +39,7 @@ export class DashboardService {
         select: { grandTotal: true },
       }),
       this.prisma.db.order.findMany({
-        where: { tenantId, createdAt: { gte: from } },
+        where: { tenantId, createdAt: { gte: from }, status: NOT_A_SALE },
         select: { createdAt: true, grandTotal: true },
       }),
       this.prisma.db.order.findMany({
@@ -44,14 +52,14 @@ export class DashboardService {
       }),
       this.prisma.db.orderItem.groupBy({
         by: ['productId', 'productName'],
-        where: { tenantId, productId: { not: null }, order: { createdAt: { gte: from } } },
+        where: { tenantId, productId: { not: null }, order: { createdAt: { gte: from }, status: NOT_A_SALE } },
         _sum: { quantity: true, lineTotal: true },
         orderBy: { _sum: { lineTotal: 'desc' } },
         take: 5,
       }),
       this.prisma.db.order.groupBy({
         by: ['couponId'],
-        where: { tenantId, createdAt: { gte: from }, couponId: { not: null } },
+        where: { tenantId, createdAt: { gte: from }, couponId: { not: null }, status: NOT_A_SALE },
         _sum: { discountTotal: true },
         _count: { _all: true },
         orderBy: { _sum: { discountTotal: 'desc' } },

@@ -9,6 +9,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { INVOICE_PDF_QUEUE } from '../queue.constants';
 import { logQueueFailure } from '../queue-failure-logger';
 import { getInvoicePath, resolveLocalUploadPath } from './invoice-storage.util';
+import { buildInvoiceContent, type InvoiceOrder } from './invoice-content';
 
 @Processor(INVOICE_PDF_QUEUE)
 export class InvoicePdfProcessor extends WorkerHost {
@@ -58,7 +59,8 @@ export class InvoicePdfProcessor extends WorkerHost {
     }
   }
 
-  private renderInvoice(order: any, logo: Buffer | null): Promise<Buffer> {
+  private renderInvoice(order: InvoiceOrder, logo: Buffer | null): Promise<Buffer> {
+    const content = buildInvoiceContent(order);
     return new Promise((resolve, reject) => {
       const doc = new PDFDocument({ margin: 50 });
       const chunks: Buffer[] = [];
@@ -82,20 +84,17 @@ export class InvoicePdfProcessor extends WorkerHost {
         }
       }
 
-      doc.fontSize(18).text(`Invoice ${order.orderNumber}`, { align: 'left' });
+      doc.fontSize(18).text(content.title, { align: 'left' });
+      doc.fontSize(11).text(content.storeName);
       doc.moveDown();
-      doc.fontSize(11).text(`Customer: ${order.customerName}`);
-      doc.text(`Date: ${new Date(order.createdAt).toLocaleDateString()}`);
+      for (const line of content.details) doc.text(line);
       doc.moveDown();
 
-      for (const item of order.items) {
-        doc.text(
-          `${item.quantity} x ${item.productName}${item.variantName ? ` (${item.variantName})` : ''} — ${item.lineTotal}`,
-        );
-      }
+      for (const item of content.items) doc.text(item);
 
       doc.moveDown();
-      doc.fontSize(13).text(`Total: ${order.currency} ${order.grandTotal}`, { align: 'right' });
+      for (const line of content.totals) doc.text(line, { align: 'right' });
+      doc.fontSize(13).text(content.grandTotal, { align: 'right' });
       doc.end();
     });
   }

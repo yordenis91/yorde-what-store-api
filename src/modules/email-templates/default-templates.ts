@@ -21,11 +21,11 @@ export const SEED_TEMPLATES: Record<EmailTemplateKey, Record<'en' | 'es', EmailT
   'order-confirmation': {
     en: {
       subject: 'Order {order_no} confirmed — {store_name}',
-      body: 'Hi {customer_name},\n\nThanks for your order at {store_name}!\n\nOrder: {order_no}\nTotal: {grand_total}\n\nWe will be in touch about delivery.',
+      body: 'Hi {customer_name},\n\nThanks for your order at {store_name}!\n\nOrder: {order_no}\nTotal: {grand_total}\n\nSee your order: {order_link}\n\nWe will be in touch about delivery.',
     },
     es: {
       subject: 'Pedido {order_no} confirmado — {store_name}',
-      body: 'Hola {customer_name},\n\n¡Gracias por tu pedido en {store_name}!\n\nPedido: {order_no}\nTotal: {grand_total}\n\nTe contactaremos sobre la entrega.',
+      body: 'Hola {customer_name},\n\n¡Gracias por tu pedido en {store_name}!\n\nPedido: {order_no}\nTotal: {grand_total}\n\nVer tu pedido: {order_link}\n\nTe contactaremos sobre la entrega.',
     },
   },
   'password-reset': {

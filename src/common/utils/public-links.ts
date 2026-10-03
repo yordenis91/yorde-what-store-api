@@ -43,3 +43,12 @@ export function staffPasswordLink(baseUrl: string | null, token: string): string
 export function storefrontPasswordLink(baseUrl: string | null, storeSlug: string, token: string): string {
   return `${baseUrl ?? ''}/store/${encodeURIComponent(storeSlug)}/login?token=${token}`;
 }
+
+/**
+ * The order's public, invoice-style storefront page — what the customer sees
+ * after ordering and can come back to (the order's random id is the credential).
+ * Same `/store/<slug>` form as storefrontPasswordLink, for the same reasons.
+ */
+export function storefrontOrderLink(baseUrl: string | null, storeSlug: string, orderId: string): string {
+  return `${baseUrl ?? ''}/store/${encodeURIComponent(storeSlug)}/order/${orderId}`;
+}

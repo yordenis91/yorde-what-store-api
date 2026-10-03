@@ -1,3 +1,4 @@
+import { ConfigService } from '@nestjs/config';
 import { ConflictException, BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getQueueToken } from '@nestjs/bullmq';
@@ -130,15 +131,23 @@ function createPrismaDouble(options: {
   return { db, stockUpdates, tenant };
 }
 
-async function buildService(double: ReturnType<typeof createPrismaDouble>, paymentsService?: Partial<PaymentsService>) {
+async function buildService(
+  double: ReturnType<typeof createPrismaDouble>,
+  paymentsService?: Partial<PaymentsService>,
+  emailQueue: { add: jest.Mock } = { add: jest.fn() },
+) {
   const moduleRef = await Test.createTestingModule({
     providers: [
       OrdersService,
       OrderEventsService,
       { provide: PrismaService, useValue: { db: double.db, tenant: double.db.tenant } },
       { provide: getQueueToken(ORDER_NOTIFICATION_QUEUE), useValue: { add: jest.fn() } },
-      { provide: getQueueToken(EMAIL_QUEUE), useValue: { add: jest.fn() } },
+      { provide: getQueueToken(EMAIL_QUEUE), useValue: emailQueue },
       { provide: PaymentsService, useValue: { refundOrderPayment: jest.fn(), ...paymentsService } },
+      {
+        provide: ConfigService,
+        useValue: { get: (key: string) => (key === 'app.publicWebUrl' ? 'https://yws.example.com' : undefined) },
+      },
     ],
   }).compile();
 
@@ -1064,5 +1073,43 @@ describe('OrdersService.updateDetails: items, shipping and payment', () => {
     await expect(
       (await buildService(card)).updateDetails(TENANT_ID, 'order-1', { paymentStatus: 'PAID' }),
     ).rejects.toThrow(ConflictException);
+  });
+});
+
+/**
+ * The confirmation email is the customer's paper trail: it must link back to
+ * their order page (built from the configured web URL, never the request) and
+ * show the total the way the store shows money.
+ */
+describe('OrdersService order-confirmation email', () => {
+  it("links to the order's public page and formats the total with the store's symbol position", async () => {
+    const double = createPrismaDouble({
+      tenant: { slug: 'mi-tienda', currencySymbol: '€', currencySymbolPosition: 'post' },
+    });
+    const emailQueue = { add: jest.fn() };
+    const service = await buildService(double, undefined, emailQueue);
+
+    await service.create(TENANT_ID, { ...baseOrder, customerEmail: 'ana@example.com' });
+
+    expect(emailQueue.add).toHaveBeenCalledWith(
+      'order-confirmation',
+      expect.objectContaining({
+        to: 'ana@example.com',
+        variables: expect.objectContaining({
+          order_link: 'https://yws.example.com/store/mi-tienda/order/order-1',
+          grand_total: '50.00€',
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('sends no confirmation email without a customer email', async () => {
+    const emailQueue = { add: jest.fn() };
+    const service = await buildService(createPrismaDouble({ tenant: { slug: 'mi-tienda' } }), undefined, emailQueue);
+
+    await service.create(TENANT_ID, baseOrder);
+
+    expect(emailQueue.add).not.toHaveBeenCalled();
   });
 });

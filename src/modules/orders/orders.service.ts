@@ -22,6 +22,9 @@ import { EmailJobData } from '../../queue/processors/email.processor';
 import { getInvoicePath } from '../../queue/processors/invoice-storage.util';
 import { OrderEvent, OrderEventsService } from './order-events.service';
 import { PaymentsService } from '../payments/payments.service';
+import { ConfigService } from '@nestjs/config';
+import { formatTenantMoney } from '../../common/utils/money';
+import { storefrontOrderLink } from '../../common/utils/public-links';
 
 const ORDER_INCLUDE = { items: true, coupon: true, shipping: true };
 
@@ -58,6 +61,7 @@ export class OrdersService {
     @InjectQueue(EMAIL_QUEUE) private readonly emailQueue: Queue,
     private readonly orderEvents: OrderEventsService,
     private readonly paymentsService: PaymentsService,
+    private readonly config: ConfigService,
   ) {}
 
   /** Live-notification endpoint for the admin dashboard's SSE stream. */
@@ -143,7 +147,14 @@ export class OrdersService {
             customer_name: order.customerName,
             store_name: tenant.name,
             order_no: order.orderNumber,
-            grand_total: `${tenant.currencySymbol}${Number(order.grandTotal).toFixed(2)}`,
+            grand_total: formatTenantMoney(order.grandTotal, tenant),
+            // The page the confirmation screen links to, so the customer can
+            // get back to their order after leaving it.
+            order_link: storefrontOrderLink(
+              this.config.get<string | null>('app.publicWebUrl') ?? null,
+              tenant.slug,
+              order.id,
+            ),
           },
         } satisfies EmailJobData,
         EMAIL_JOB_OPTIONS,
