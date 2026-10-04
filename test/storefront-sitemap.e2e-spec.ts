@@ -33,7 +33,7 @@ describe('Storefront sitemap (e2e)', () => {
     });
   });
 
-  it('lists the home page and every published, active product at this store\'s own forwarded origin', async () => {
+  it("lists the home page and every published, active product at this store's own forwarded origin", async () => {
     const { tenant } = await seedTenant(prisma, { slug: 'sitemap-tenant' });
     const visible = await seedProduct(prisma, tenant.id, {
       name: 'Visible',
@@ -42,7 +42,9 @@ describe('Storefront sitemap (e2e)', () => {
       quantity: 5,
     });
     await prisma.withTenant(tenant.id, (tx) =>
-      tx.product.create({ data: { tenantId: tenant.id, name: 'Hidden', sku: 'HID-1', price: '5', isPublished: false } }),
+      tx.product.create({
+        data: { tenantId: tenant.id, name: 'Hidden', sku: 'HID-1', price: '5', isPublished: false },
+      }),
     );
     await prisma.withTenant(tenant.id, (tx) =>
       tx.product.create({ data: { tenantId: tenant.id, name: 'Inactive', sku: 'INA-1', price: '5', isActive: false } }),
@@ -69,9 +71,7 @@ describe('Storefront sitemap (e2e)', () => {
     await seedProduct(prisma, tenantA.id, { name: 'A-Product', sku: 'A-1', price: '10', quantity: 5 });
     const productB = await seedProduct(prisma, tenantB.id, { name: 'B-Product', sku: 'B-1', price: '10', quantity: 5 });
 
-    const res = await request(app.getHttpServer())
-      .get('/api/v1/storefront/sitemap.xml')
-      .set('X-Tenant-ID', tenantB.id);
+    const res = await request(app.getHttpServer()).get('/api/v1/storefront/sitemap.xml').set('X-Tenant-ID', tenantB.id);
 
     expect(res.status).toBe(200);
     expect(res.text).toContain(productB.id);

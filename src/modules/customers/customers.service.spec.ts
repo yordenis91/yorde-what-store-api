@@ -235,7 +235,7 @@ describe('CustomersService.anonymize', () => {
     });
   });
 
-  it('also revokes the mobile apps\' refresh tokens, which live in their own table', async () => {
+  it("also revokes the mobile apps' refresh tokens, which live in their own table", async () => {
     const double = createPrismaDouble({ customers: [{ id: 'c1', name: 'Ana' }] });
     const service = await buildService(double);
 
