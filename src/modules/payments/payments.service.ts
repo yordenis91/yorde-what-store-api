@@ -8,6 +8,7 @@ import { TenantsService } from '../tenants/tenants.service';
 import { StripeAdapter } from './adapters/stripe.adapter';
 import { MercadoPagoAdapter } from './adapters/mercadopago.adapter';
 import { INVOICE_PDF_QUEUE } from '../../queue/queue.constants';
+import { PLAN_CHECKOUT_KIND } from '../billing/billing.constants';
 
 /**
  * Both providers retry undelivered webhooks, and a delivery can simply
@@ -81,6 +82,9 @@ export class PaymentsService {
 
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object as Stripe.Checkout.Session;
+      // Plan billing checkouts run on the same Stripe account, so this
+      // endpoint receives them too; BillingService handles those.
+      if (session.metadata?.kind === PLAN_CHECKOUT_KIND) return { received: true };
       const { tenantId, orderId } = session.metadata ?? {};
       if (!tenantId || !orderId) {
         this.logger.warn(`Stripe session ${session.id} missing tenantId/orderId metadata`);

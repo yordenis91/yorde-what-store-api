@@ -5,9 +5,10 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { FulfillmentMethod } from '@prisma/client';
+import { BillingProvider, FulfillmentMethod } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreatePlanDto, UpdatePlanDto } from './dto';
+import { graceEndsAt, isLapsed, isPaidPlan } from './subscription-lifecycle.util';
 
 const FULFILLMENT_METHODS = Object.values(FulfillmentMethod);
 
@@ -74,6 +75,13 @@ export class PlansService {
 
     await this.assertUnderNewProductLimit(tenantId, plan.maxProducts);
 
+    const current = await this.currentSubscription(tenantId);
+    if (current?.stripeSubscriptionId) {
+      throw new ConflictException(
+        'Cancel the card subscription from the billing portal before switching to a free plan',
+      );
+    }
+
     const expiresAt = this.computeExpiry(plan.duration);
     // PENDING_UPGRADE too: otherwise a store with an open upgrade request
     // would get a second subscription row here, and approving the request
@@ -86,7 +94,15 @@ export class PlansService {
     if (existing) {
       return this.prisma.subscription.update({
         where: { id: existing.id },
-        data: { planId, expiresAt, status: 'ACTIVE', requestedPlanId: null },
+        data: {
+          planId,
+          expiresAt,
+          status: 'ACTIVE',
+          requestedPlanId: null,
+          requestedPaymentReference: null,
+          billingProvider: 'MANUAL',
+          expiryNoticesSent: [],
+        },
       });
     }
     return this.prisma.subscription.create({ data: { tenantId, planId, expiresAt, status: 'ACTIVE' } });
@@ -94,14 +110,16 @@ export class PlansService {
 
   /**
    * Single source of truth for plan limits. A store with an open upgrade
-   * request keeps its current plan's limits until the request is approved.
+   * request keeps its current plan's limits until the request is approved; a
+   * paid plan past expiry and grace counts as Free even before the hourly
+   * expiry job gets to downgrade the row itself.
    */
   async getEntitlements(tenantId: string): Promise<PlanEntitlements> {
     const [subscription, tenant] = await Promise.all([
       this.currentSubscription(tenantId),
       this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { limitsOverride: true } }),
     ]);
-    const plan = subscription?.plan;
+    const plan = subscription && !isLapsed(subscription) ? subscription.plan : undefined;
     const base: PlanEntitlements = plan
       ? {
           planId: plan.id,
@@ -129,16 +147,50 @@ export class PlansService {
     });
   }
 
-  async requestUpgrade(tenantId: string, planId: string) {
+  /** GET /plans/current/subscription — the row plus what the admin panel needs to explain where it stands. */
+  async currentSubscriptionView(tenantId: string) {
+    const subscription = await this.currentSubscription(tenantId);
+    if (!subscription) return null;
+    const paid = isPaidPlan(subscription.plan);
+    return {
+      ...subscription,
+      graceEndsAt: paid ? graceEndsAt(subscription.expiresAt) : null,
+      lapsed: isLapsed(subscription),
+    };
+  }
+
+  /**
+   * Manual purchase or renewal of a paid plan: the store pays outside the app
+   * (Zelle, transfer), optionally notes a reference, and a Super Admin
+   * approves it. Requesting the current plan again is a renewal.
+   */
+  async requestUpgrade(tenantId: string, planId: string, paymentReference?: string) {
     const plan = await this.prisma.plan.findFirst({ where: { id: planId, isActive: true } });
     if (!plan) throw new NotFoundException('Plan not found');
+    if (!isPaidPlan(plan)) throw new BadRequestException('Free plans are switched to directly, without a request');
 
-    const current = await this.currentSubscription(tenantId);
-    if (!current) throw new BadRequestException('No active subscription to upgrade');
+    let current = await this.currentSubscription(tenantId);
+    if (current?.stripeSubscriptionId) {
+      throw new ConflictException('This store pays by card — change or renew the plan from the billing portal');
+    }
+    // Stores created before registration started a Free subscription have no
+    // row to attach the request to.
+    if (!current) {
+      const freePlan = await this.findFreePlan();
+      if (!freePlan) throw new BadRequestException('No subscription to upgrade from');
+      current = await this.prisma.subscription.create({
+        data: { tenantId, planId: freePlan.id, status: 'ACTIVE' },
+        include: { plan: true },
+      });
+    }
 
     return this.prisma.subscription.update({
       where: { id: current.id },
-      data: { requestedPlanId: planId, status: 'PENDING_UPGRADE' },
+      data: {
+        requestedPlanId: planId,
+        requestedPaymentReference: paymentReference?.trim() || null,
+        status: 'PENDING_UPGRADE',
+      },
     });
   }
 
@@ -160,24 +212,95 @@ export class PlansService {
       tenant: r.tenant,
       currentPlan: r.plan,
       requestedPlan: r.requestedPlanId ? requestedPlanById.get(r.requestedPlanId) : null,
+      isRenewal: r.requestedPlanId === r.planId,
+      paymentReference: r.requestedPaymentReference,
+      expiresAt: r.expiresAt,
       createdAt: r.createdAt,
     }));
   }
 
+  /**
+   * A renewal of a plan that hasn't lapsed extends from the current expiry, so
+   * renewing early never costs the store the days it already paid for. A
+   * change of plan (or a lapsed one) starts a fresh period today.
+   */
   async approveUpgrade(subscriptionId: string) {
-    const subscription = await this.prisma.subscription.findUniqueOrThrow({ where: { id: subscriptionId } });
-    if (!subscription.requestedPlanId) throw new BadRequestException('No pending upgrade request');
+    const subscription = await this.prisma.subscription.findUniqueOrThrow({
+      where: { id: subscriptionId },
+      include: { plan: true },
+    });
+    if (subscription.status !== 'PENDING_UPGRADE' || !subscription.requestedPlanId) {
+      throw new BadRequestException('No pending upgrade request');
+    }
 
     const plan = await this.prisma.plan.findUniqueOrThrow({ where: { id: subscription.requestedPlanId } });
+    const now = new Date();
+    const isRenewal =
+      subscription.planId === plan.id &&
+      !!subscription.expiresAt &&
+      subscription.expiresAt > now &&
+      !isLapsed(subscription, now);
+    const from = isRenewal ? subscription.expiresAt! : now;
+
     return this.prisma.subscription.update({
       where: { id: subscriptionId },
       data: {
         planId: plan.id,
         requestedPlanId: null,
+        requestedPaymentReference: null,
         status: 'ACTIVE',
-        expiresAt: this.computeExpiry(plan.duration),
+        expiresAt: this.computeExpiry(plan.duration, from),
+        billingProvider: 'MANUAL',
+        expiryNoticesSent: [],
       },
     });
+  }
+
+  /** Declines a request (payment never arrived, wrong amount…): the store keeps its current plan. */
+  async rejectUpgrade(subscriptionId: string) {
+    const subscription = await this.prisma.subscription.findUniqueOrThrow({ where: { id: subscriptionId } });
+    if (subscription.status !== 'PENDING_UPGRADE') throw new BadRequestException('No pending upgrade request');
+
+    return this.prisma.subscription.update({
+      where: { id: subscriptionId },
+      data: { status: 'ACTIVE', requestedPlanId: null, requestedPaymentReference: null },
+    });
+  }
+
+  /**
+   * Records a paid period confirmed by a payment provider (Stripe Billing's
+   * webhooks): switches the store's subscription to `planId` until
+   * `expiresAt`, clearing any pending request and the previous period's
+   * reminders. Leaves stripeCustomerId as it was when not given.
+   */
+  async activatePlan(
+    tenantId: string,
+    planId: string,
+    billing: {
+      expiresAt: Date | null;
+      billingProvider: BillingProvider;
+      stripeCustomerId?: string | null;
+      stripeSubscriptionId: string | null;
+      cancelAtPeriodEnd?: boolean;
+    },
+  ) {
+    const data = {
+      planId,
+      status: 'ACTIVE' as const,
+      requestedPlanId: null,
+      requestedPaymentReference: null,
+      expiryNoticesSent: [],
+      cancelAtPeriodEnd: false,
+      ...billing,
+    };
+    const current = await this.currentSubscription(tenantId);
+    if (current) return this.prisma.subscription.update({ where: { id: current.id }, data });
+    return this.prisma.subscription.create({ data: { tenantId, ...data } });
+  }
+
+  /** The plan a lapsed store is moved to: the oldest active free plan (the seeded "Free"). */
+  findFreePlan() {
+    return this.prisma.plan.findFirst({ where: { isActive: true, price: 0 }, orderBy: { createdAt: 'asc' } });
   }
 
   /**
@@ -189,7 +312,7 @@ export class PlansService {
    * what to keep to the merchant, not to whatever order Prisma happens to
    * return rows in.
    */
-  private async assertUnderNewProductLimit(tenantId: string, maxProducts: number) {
+  async assertUnderNewProductLimit(tenantId: string, maxProducts: number) {
     if (maxProducts === -1) return;
 
     const currentCount = await this.prisma.db.product.count({ where: { tenantId } });
@@ -200,10 +323,10 @@ export class PlansService {
     }
   }
 
-  private computeExpiry(duration: string): Date | null {
-    const now = new Date();
-    if (duration === 'MONTHLY') return new Date(now.setMonth(now.getMonth() + 1));
-    if (duration === 'YEARLY') return new Date(now.setFullYear(now.getFullYear() + 1));
+  private computeExpiry(duration: string, from: Date = new Date()): Date | null {
+    const date = new Date(from);
+    if (duration === 'MONTHLY') return new Date(date.setMonth(date.getMonth() + 1));
+    if (duration === 'YEARLY') return new Date(date.setFullYear(date.getFullYear() + 1));
     return null;
   }
 

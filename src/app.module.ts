@@ -40,6 +40,7 @@ import { OrdersModule } from './modules/orders/orders.module';
 import { PreviewModule } from './modules/preview/preview.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { PlansModule } from './modules/plans/plans.module';
+import { BillingModule } from './modules/billing/billing.module';
 import { UsersModule } from './modules/users/users.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { DevicesModule } from './modules/devices/devices.module';
@@ -115,6 +116,7 @@ import { AppService } from './app.service';
     PreviewModule,
     PaymentsModule,
     PlansModule,
+    BillingModule,
     UsersModule,
     CustomersModule,
     DevicesModule,

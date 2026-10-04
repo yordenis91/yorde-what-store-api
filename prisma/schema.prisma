@@ -70,6 +70,14 @@ enum SubscriptionStatus {
   CANCELLED
 }
 
+/// How a paid Subscription is renewed. MANUAL: the store requests a renewal
+/// (paying by Zelle/transfer) and a Super Admin approves it. STRIPE: Stripe
+/// Billing charges the card every period and its webhooks move expiresAt.
+enum BillingProvider {
+  MANUAL
+  STRIPE
+}
+
 enum DiscountType {
   PERCENTAGE
   FLAT
@@ -909,6 +917,23 @@ model Subscription {
   startedAt       DateTime           @default(now()) @map("started_at")
   expiresAt       DateTime?          @map("expires_at")
   createdAt       DateTime           @default(now()) @map("created_at")
+
+  /// Optional note sent with a manual upgrade/renewal request (e.g. the
+  /// Zelle confirmation number), shown to the Super Admin approving it.
+  requestedPaymentReference String? @map("requested_payment_reference")
+
+  billingProvider      BillingProvider @default(MANUAL) @map("billing_provider")
+  /// Kept across plan changes so a returning store reuses its Stripe customer
+  /// (saved card, invoice history).
+  stripeCustomerId     String?         @map("stripe_customer_id")
+  stripeSubscriptionId String?         @unique @map("stripe_subscription_id")
+  /// Set from Stripe when the store cancels from the billing portal: the plan
+  /// runs to expiresAt and won't renew, so renewal reminders apply again.
+  cancelAtPeriodEnd    Boolean         @default(false) @map("cancel_at_period_end")
+  /// Expiry notices already sent for the current expiresAt ('D7', 'D1', 'D0',
+  /// 'DOWNGRADED' — see subscription-lifecycle.util.ts). Cleared whenever a
+  /// payment moves expiresAt, so the next period gets its own reminders.
+  expiryNoticesSent    String[]        @default([]) @map("expiry_notices_sent")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   plan   Plan   @relation(fields: [planId], references: [id])

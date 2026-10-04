@@ -105,3 +105,30 @@ describe('EmailProcessor — tenant SMTP override', () => {
     expect(sendMail).not.toHaveBeenCalled();
   });
 });
+
+describe('EmailProcessor — platform billing emails', () => {
+  it("sends through the platform SMTP even when the store has its own, in the store's language", async () => {
+    const { processor, sendMail, tenants } = buildProcessor({
+      tenantSmtp: { host: 'tenant-smtp.example.com', port: 587, from: 'store@example.com' },
+    });
+
+    await processor.process(
+      buildJob({
+        templateKey: 'subscription-expiring',
+        locale: 'es',
+        variables: { plan_name: 'Pro', store_name: 'Vortex', expires_on: '10 de octubre de 2026' },
+      }),
+    );
+
+    expect(tenants.getDecryptedSmtpConfig).not.toHaveBeenCalled();
+    expect(nodemailer.createTransport).toHaveBeenCalledWith(
+      expect.objectContaining({ host: 'platform-smtp.example.com' }),
+    );
+    expect(sendMail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: 'platform@example.com',
+        subject: 'Tu plan Pro de Vortex vence el 10 de octubre de 2026',
+      }),
+    );
+  });
+});

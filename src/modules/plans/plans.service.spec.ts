@@ -194,3 +194,143 @@ describe('PlansService.getEntitlements', () => {
     await expect(service.assertFulfillmentMethodAllowed(TENANT_ID, 'STRIPE')).resolves.toBeUndefined();
   });
 });
+
+describe('PlansService.getEntitlements — expiry', () => {
+  const lapsingPlan = {
+    id: 'plan-pro',
+    name: 'Pro',
+    price: 19,
+    maxStores: 3,
+    maxProducts: 500,
+    fulfillmentMethods: ['STRIPE'],
+  };
+  const days = (n: number) => new Date(Date.now() + n * 24 * 60 * 60 * 1000);
+
+  it('keeps the paid plan during the grace period', async () => {
+    const { service } = buildService({ existingSubscription: { plan: lapsingPlan, expiresAt: days(-3) } });
+    await expect(service.getEntitlements(TENANT_ID)).resolves.toMatchObject({ planId: 'plan-pro' });
+  });
+
+  it('falls back to Free once the grace period is over, even before the expiry job runs', async () => {
+    const { service } = buildService({ existingSubscription: { plan: lapsingPlan, expiresAt: days(-8) } });
+    await expect(service.getEntitlements(TENANT_ID)).resolves.toMatchObject({
+      planId: null,
+      maxProducts: 20,
+      fulfillmentMethods: ['WHATSAPP'],
+    });
+  });
+});
+
+describe('PlansService manual renewals', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const proPlan = { id: 'plan-pro', price: 19, duration: 'MONTHLY', isActive: true };
+  const freePlan = { id: 'plan-free', price: 0, duration: 'LIFETIME', isActive: true };
+
+  function build(options: { requested?: Record<string, unknown>; subscription?: Record<string, unknown> | null }) {
+    const subscription = options.subscription === undefined ? null : options.subscription;
+    const requested = options.requested ?? proPlan;
+    const update = jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'sub-1', ...data }));
+    const create = jest
+      .fn()
+      .mockImplementation(({ data }) => Promise.resolve({ id: 'sub-new', plan: freePlan, ...data }));
+    const prisma = {
+      plan: {
+        findFirst: jest
+          .fn()
+          .mockImplementation(({ where }) => Promise.resolve(where.price === 0 ? freePlan : requested)),
+        findUniqueOrThrow: jest.fn().mockResolvedValue(requested),
+      },
+      subscription: {
+        findFirst: jest.fn().mockResolvedValue(subscription),
+        findUniqueOrThrow: jest.fn().mockResolvedValue(subscription),
+        update,
+        create,
+      },
+    } as unknown as PrismaService;
+    return { service: new PlansService(prisma), update, create };
+  }
+
+  it('records the request with its payment reference', async () => {
+    const { service, update } = build({ subscription: { id: 'sub-1', plan: freePlan } });
+
+    await service.requestUpgrade(TENANT_ID, 'plan-pro', '  ZELLE-123 ');
+
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'sub-1' },
+      data: { requestedPlanId: 'plan-pro', requestedPaymentReference: 'ZELLE-123', status: 'PENDING_UPGRADE' },
+    });
+  });
+
+  it('gives a store with no subscription row a Free one to attach the request to', async () => {
+    const { service, create, update } = build({ subscription: null });
+
+    await service.requestUpgrade(TENANT_ID, 'plan-pro');
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ planId: 'plan-free' }) }),
+    );
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'sub-new' } }));
+  });
+
+  it('refuses a manual request from a store paying by card', async () => {
+    const { service } = build({ subscription: { id: 'sub-1', plan: proPlan, stripeSubscriptionId: 'sub_1' } });
+    await expect(service.requestUpgrade(TENANT_ID, 'plan-pro')).rejects.toThrow(ConflictException);
+  });
+
+  it('extends an early renewal from the current expiry, not from today', async () => {
+    const expiresAt = new Date(Date.now() + 5 * DAY);
+    const { service, update } = build({
+      subscription: {
+        id: 'sub-1',
+        planId: 'plan-pro',
+        plan: proPlan,
+        requestedPlanId: 'plan-pro',
+        status: 'PENDING_UPGRADE',
+        expiresAt,
+      },
+    });
+
+    await service.approveUpgrade('sub-1');
+
+    const expected = new Date(expiresAt);
+    expected.setMonth(expected.getMonth() + 1);
+    expect(update.mock.calls[0][0].data).toMatchObject({
+      planId: 'plan-pro',
+      expiresAt: expected,
+      billingProvider: 'MANUAL',
+      expiryNoticesSent: [],
+      requestedPaymentReference: null,
+    });
+  });
+
+  it('starts a lapsed renewal from today', async () => {
+    const { service, update } = build({
+      subscription: {
+        id: 'sub-1',
+        planId: 'plan-pro',
+        plan: proPlan,
+        requestedPlanId: 'plan-pro',
+        status: 'PENDING_UPGRADE',
+        expiresAt: new Date(Date.now() - 10 * DAY),
+      },
+    });
+
+    await service.approveUpgrade('sub-1');
+
+    const expiresAt: Date = update.mock.calls[0][0].data.expiresAt;
+    expect(expiresAt.getTime()).toBeGreaterThan(Date.now() + 27 * DAY);
+  });
+
+  it('declines a request and leaves the current plan alone', async () => {
+    const { service, update } = build({
+      subscription: { id: 'sub-1', planId: 'plan-free', status: 'PENDING_UPGRADE', requestedPlanId: 'plan-pro' },
+    });
+
+    await service.rejectUpgrade('sub-1');
+
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'sub-1' },
+      data: { status: 'ACTIVE', requestedPlanId: null, requestedPaymentReference: null },
+    });
+  });
+});

@@ -52,6 +52,13 @@ export const redisConfig = registerAs('redis', () => ({
 export const stripeConfig = registerAs('stripe', () => ({
   secretKey: process.env.STRIPE_SECRET_KEY,
   webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+  /**
+   * Signing secret of the separate Stripe webhook endpoint for plan billing
+   * (POST /billing/stripe/webhook). Card billing for plans stays off — the
+   * admin panel only offers manual renewal — until both this and
+   * STRIPE_SECRET_KEY are set.
+   */
+  billingWebhookSecret: process.env.STRIPE_BILLING_WEBHOOK_SECRET,
 }));
 
 /**

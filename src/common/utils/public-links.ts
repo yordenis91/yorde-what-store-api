@@ -52,3 +52,8 @@ export function storefrontPasswordLink(baseUrl: string | null, storeSlug: string
 export function storefrontOrderLink(baseUrl: string | null, storeSlug: string, orderId: string): string {
   return `${baseUrl ?? ''}/store/${encodeURIComponent(storeSlug)}/order/${orderId}`;
 }
+
+/** The admin panel's plans page — where billing emails send a store owner to renew. */
+export function adminPlansLink(baseUrl: string | null): string {
+  return `${baseUrl ?? ''}/admin/plans`;
+}

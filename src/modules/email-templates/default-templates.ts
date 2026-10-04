@@ -50,3 +50,52 @@ export const DEFAULT_TEMPLATES: Record<EmailTemplateKey, EmailTemplateContent> =
   'order-confirmation': SEED_TEMPLATES['order-confirmation'].en,
   'password-reset': SEED_TEMPLATES['password-reset'].en,
 };
+
+/**
+ * Emails from the platform to a store owner about their own plan — not
+ * tenant-editable (absent from TEMPLATE_KEYS) and always sent through the
+ * platform's SMTP, never the store's.
+ */
+export const PLATFORM_EMAIL_KEYS = [
+  'subscription-expiring',
+  'subscription-expired',
+  'subscription-downgraded',
+] as const;
+export type PlatformEmailKey = (typeof PLATFORM_EMAIL_KEYS)[number];
+
+export function isPlatformEmailKey(key: string): key is PlatformEmailKey {
+  return (PLATFORM_EMAIL_KEYS as readonly string[]).includes(key);
+}
+
+export const PLATFORM_EMAIL_TEMPLATES: Record<PlatformEmailKey, Record<'en' | 'es', EmailTemplateContent>> = {
+  'subscription-expiring': {
+    en: {
+      subject: 'Your {plan_name} plan for {store_name} expires on {expires_on}',
+      body: 'Hi {name},\n\nThe {plan_name} plan for {store_name} expires on {expires_on}.\n\nRenew it to keep its products, stores and checkout channels:\n{billing_link}\n\nIf it is not renewed, the store keeps working for 7 more days and then moves to the Free plan. No data is deleted.',
+    },
+    es: {
+      subject: 'Tu plan {plan_name} de {store_name} vence el {expires_on}',
+      body: 'Hola {name},\n\nEl plan {plan_name} de {store_name} vence el {expires_on}.\n\nRenuévalo para conservar sus productos, tiendas y canales de cobro:\n{billing_link}\n\nSi no se renueva, la tienda sigue funcionando 7 días más y luego pasa al plan Gratis. No se borra ningún dato.',
+    },
+  },
+  'subscription-expired': {
+    en: {
+      subject: 'Your {plan_name} plan for {store_name} has expired',
+      body: 'Hi {name},\n\nThe {plan_name} plan for {store_name} expired on {expires_on}. Everything keeps working until {grace_ends_on}; after that the store moves to the Free plan.\n\nRenew now:\n{billing_link}',
+    },
+    es: {
+      subject: 'Tu plan {plan_name} de {store_name} ha vencido',
+      body: 'Hola {name},\n\nEl plan {plan_name} de {store_name} venció el {expires_on}. Todo sigue funcionando hasta el {grace_ends_on}; después la tienda pasa al plan Gratis.\n\nRenuévalo ahora:\n{billing_link}',
+    },
+  },
+  'subscription-downgraded': {
+    en: {
+      subject: '{store_name} is now on the Free plan',
+      body: 'Hi {name},\n\nThe {plan_name} plan for {store_name} was not renewed, so the store is now on the Free plan. Your products, orders and customers are all still there, but checkout channels and limits outside the Free plan are paused.\n\nUpgrade again at any time:\n{billing_link}',
+    },
+    es: {
+      subject: '{store_name} ahora está en el plan Gratis',
+      body: 'Hola {name},\n\nEl plan {plan_name} de {store_name} no se renovó, así que la tienda pasó al plan Gratis. Tus productos, pedidos y clientes siguen ahí, pero los canales de cobro y límites fuera del plan Gratis quedan en pausa.\n\nPuedes mejorar tu plan cuando quieras:\n{billing_link}',
+    },
+  },
+};
