@@ -5,6 +5,11 @@
 -- holds the original seeded text: a template a Super Admin already edited is
 -- left as it is, and tenants' own overrides are never touched.
 
+-- email_templates is under FORCE ROW LEVEL SECURITY and its policy only lets
+-- tenant_id IS NULL rows through USING, not WITH CHECK, so updating the
+-- platform rows needs the bypass (transaction-local).
+SELECT set_config('app.bypass_rls', 'on', true);
+
 UPDATE "email_templates"
 SET "updated_at" = NOW(), "body" = E'Hola {customer_name},\n\n¡Gracias por tu pedido en {store_name}!\n\nPedido: {order_no}\nTotal: {grand_total}\n\nVer tu pedido: {order_link}\n\nTe contactaremos sobre la entrega.'
 WHERE "tenant_id" IS NULL

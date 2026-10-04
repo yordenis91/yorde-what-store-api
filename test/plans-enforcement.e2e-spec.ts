@@ -303,6 +303,39 @@ describe('Plan enforcement (e2e)', () => {
     });
   });
 
+  describe('store limit per owner', () => {
+    const createStore = (token: Record<string, string>, slug: string) =>
+      request(app.getHttpServer())
+        .post('/api/v1/tenants')
+        .set({ Authorization: token.Authorization })
+        .send({ name: slug, slug });
+
+    it('Free allows one store; Pro allows three', async () => {
+      const free = await storeOn('lim-free', freePlan.id);
+      await createStore(free.token, 'lim-free-2').expect(403);
+
+      const pro = await storeOn('lim-pro', proPlan.id, { expiresAt: new Date(Date.now() + 10 * DAY) });
+      await createStore(pro.token, 'lim-pro-2').expect(201);
+      await createStore(pro.token, 'lim-pro-3').expect(201);
+      await createStore(pro.token, 'lim-pro-4').expect(403);
+    });
+
+    it('keeps the plan limit while a renewal request is pending', async () => {
+      const pro = await storeOn('lim-pending', proPlan.id, { expiresAt: new Date(Date.now() + 10 * DAY) });
+      await request(app.getHttpServer())
+        .post('/api/v1/plans/current/request-upgrade')
+        .set(pro.token)
+        .send({ planId: proPlan.id })
+        .expect(201);
+      await createStore(pro.token, 'lim-pending-2').expect(201);
+    });
+
+    it('a paid plan past expiry and grace only gets one store', async () => {
+      const pro = await storeOn('lim-lapsed', proPlan.id, { expiresAt: new Date(Date.now() - 9 * DAY) });
+      await createStore(pro.token, 'lim-lapsed-2').expect(403);
+    });
+  });
+
   describe('expiry job', () => {
     it('inside the grace period the store keeps the paid channels; after it, Free', async () => {
       const { token, tenant, subscription } = await storeOn('exp', proPlan.id, {
