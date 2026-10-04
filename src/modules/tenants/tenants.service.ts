@@ -8,7 +8,8 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { FulfillmentMethod, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { PlansService } from '../plans/plans.service';
+import { FALLBACK_ENTITLEMENTS, PlansService } from '../plans/plans.service';
+import { isLapsed } from '../plans/subscription-lifecycle.util';
 import { decryptSecret, encryptSecret } from '../../common/utils/crypto.util';
 import { maskSmtpPassword } from '../../common/utils/mask-tenant-secrets.util';
 import { deleteUploadedFile } from '../uploads/uploads.util';
@@ -109,12 +110,16 @@ export class TenantsService {
 
   async createAdditional(userId: string, dto: CreateTenantDto) {
     const owned = await this.prisma.tenant.count({ where: { ownerId: userId } });
-    const activeSubscription = await this.prisma.subscription.findFirst({
-      where: { tenant: { ownerId: userId }, status: 'ACTIVE' },
+    // PENDING_UPGRADE counts: a store waiting for a renewal or upgrade to be
+    // approved still holds its current plan. A paid plan past expiry and grace
+    // doesn't — it only has Free limits from then on, as in getEntitlements.
+    const subscriptions = await this.prisma.subscription.findMany({
+      where: { tenant: { ownerId: userId }, status: { in: ['ACTIVE', 'PENDING_UPGRADE'] } },
       include: { plan: true },
       orderBy: { createdAt: 'desc' },
     });
-    const maxStores = activeSubscription?.plan.maxStores ?? 1;
+    const current = subscriptions.find((s) => !isLapsed(s));
+    const maxStores = current?.plan.maxStores ?? FALLBACK_ENTITLEMENTS.maxStores;
     if (maxStores !== -1 && owned >= maxStores) {
       throw new ForbiddenException('Store limit reached for your current plan');
     }
