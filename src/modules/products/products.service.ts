@@ -53,7 +53,7 @@ export class ProductsService {
     });
   }
 
-  /** Mirrors the maxStores check in TenantsService.createAdditional — same fallback shape (Free plan's own limit) for a tenant with no subscription row at all. -1 means unlimited (Business plan). */
+  /** Uses the plan's limit with any Super Admin `limitsOverride` applied (see PlansService.getEntitlements). -1 means unlimited (Business plan). */
   private async assertUnderProductLimit(tenantId: string) {
     // Serializes concurrent creates for this tenant: the lock is scoped to
     // the request's own transaction (TenantScopeInterceptor's) and
@@ -62,8 +62,7 @@ export class ProductsService {
     // instead of both reading the same pre-insert count.
     await this.prisma.db.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${tenantId}))`;
 
-    const subscription = await this.plansService.currentSubscription(tenantId);
-    const maxProducts = subscription?.plan.maxProducts ?? 20;
+    const { maxProducts } = await this.plansService.getEntitlements(tenantId);
     if (maxProducts === -1) return;
 
     const currentCount = await this.prisma.db.product.count({ where: { tenantId } });

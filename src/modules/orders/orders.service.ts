@@ -22,6 +22,7 @@ import { EmailJobData } from '../../queue/processors/email.processor';
 import { getInvoicePath } from '../../queue/processors/invoice-storage.util';
 import { OrderEvent, OrderEventsService } from './order-events.service';
 import { PaymentsService } from '../payments/payments.service';
+import { PlansService } from '../plans/plans.service';
 import { ConfigService } from '@nestjs/config';
 import { formatTenantMoney } from '../../common/utils/money';
 import { storefrontOrderLink } from '../../common/utils/public-links';
@@ -62,6 +63,7 @@ export class OrdersService {
     private readonly orderEvents: OrderEventsService,
     private readonly paymentsService: PaymentsService,
     private readonly config: ConfigService,
+    private readonly plansService: PlansService,
   ) {}
 
   /** Live-notification endpoint for the admin dashboard's SSE stream. */
@@ -71,6 +73,14 @@ export class OrdersService {
 
   async create(tenantId: string, dto: CreateOrderDto, customerId?: string) {
     const tenant = await this.prisma.db.tenant.findUniqueOrThrow({ where: { id: tenantId } });
+
+    // The storefront only lists channels the plan includes, but the request
+    // itself can name any of them. Worded for the customer, who can't upgrade
+    // anything.
+    const { fulfillmentMethods } = await this.plansService.getEntitlements(tenantId);
+    if (!fulfillmentMethods.includes(dto.fulfillmentMethod)) {
+      throw new BadRequestException('This checkout method is not available for this store');
+    }
 
     // Fails fast, before pricing/stock work, if the store never configured a
     // Zelle recipient — otherwise the order would be created with no actual

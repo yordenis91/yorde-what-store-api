@@ -1,6 +1,36 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { FulfillmentMethod } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreatePlanDto, UpdatePlanDto } from './dto';
+
+const FULFILLMENT_METHODS = Object.values(FulfillmentMethod);
+
+/** What a tenant may do right now: its plan's limits with any per-tenant `limitsOverride` applied. -1 means unlimited. */
+export interface PlanEntitlements {
+  planId: string | null;
+  planName: string | null;
+  maxStores: number;
+  maxProducts: number;
+  fulfillmentMethods: FulfillmentMethod[];
+}
+
+/**
+ * Applied to a tenant with no subscription row at all (registration only
+ * creates one when an active plan exists). Matches the seeded Free plan, and
+ * the 20-product / 1-store fallbacks ProductsService and TenantsService
+ * already used.
+ */
+export const FALLBACK_ENTITLEMENTS: Omit<PlanEntitlements, 'planId' | 'planName'> = {
+  maxStores: 1,
+  maxProducts: 20,
+  fulfillmentMethods: ['WHATSAPP'],
+};
 
 @Injectable()
 export class PlansService {
@@ -29,25 +59,66 @@ export class PlansService {
     return { deactivated: true };
   }
 
+  /**
+   * Self-service switch, for free plans only. Paid plans go through
+   * requestUpgrade → a Super Admin's approveUpgrade, because nothing here
+   * charges the tenant: without this check any OWNER could POST a paid
+   * plan's id and get it for free.
+   */
   async subscribe(tenantId: string, planId: string) {
     const plan = await this.prisma.plan.findFirst({ where: { id: planId, isActive: true } });
     if (!plan) throw new NotFoundException('Plan not found');
+    if (Number(plan.price) > 0) {
+      throw new ForbiddenException('Paid plans must be requested as an upgrade and approved by the platform');
+    }
 
     await this.assertUnderNewProductLimit(tenantId, plan.maxProducts);
 
     const expiresAt = this.computeExpiry(plan.duration);
+    // PENDING_UPGRADE too: otherwise a store with an open upgrade request
+    // would get a second subscription row here, and approving the request
+    // later would update a row currentSubscription no longer reads.
     const existing = await this.prisma.subscription.findFirst({
-      where: { tenantId, status: 'ACTIVE' },
+      where: { tenantId, status: { in: ['ACTIVE', 'PENDING_UPGRADE'] } },
       orderBy: { createdAt: 'desc' },
     });
 
     if (existing) {
       return this.prisma.subscription.update({
         where: { id: existing.id },
-        data: { planId, expiresAt, status: 'ACTIVE' },
+        data: { planId, expiresAt, status: 'ACTIVE', requestedPlanId: null },
       });
     }
     return this.prisma.subscription.create({ data: { tenantId, planId, expiresAt, status: 'ACTIVE' } });
+  }
+
+  /**
+   * Single source of truth for plan limits. A store with an open upgrade
+   * request keeps its current plan's limits until the request is approved.
+   */
+  async getEntitlements(tenantId: string): Promise<PlanEntitlements> {
+    const [subscription, tenant] = await Promise.all([
+      this.currentSubscription(tenantId),
+      this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { limitsOverride: true } }),
+    ]);
+    const plan = subscription?.plan;
+    const base: PlanEntitlements = plan
+      ? {
+          planId: plan.id,
+          planName: plan.name,
+          maxStores: plan.maxStores,
+          maxProducts: plan.maxProducts,
+          fulfillmentMethods: plan.fulfillmentMethods,
+        }
+      : { planId: null, planName: null, ...FALLBACK_ENTITLEMENTS };
+    return applyLimitsOverride(base, tenant?.limitsOverride);
+  }
+
+  async assertFulfillmentMethodAllowed(tenantId: string, method: FulfillmentMethod) {
+    const { fulfillmentMethods } = await this.getEntitlements(tenantId);
+    if (!fulfillmentMethods.includes(method)) {
+      throw new ForbiddenException(`${method} is not included in this store's plan. Upgrade the plan to enable it.`);
+    }
   }
 
   async currentSubscription(tenantId: string) {
@@ -140,4 +211,26 @@ export class PlansService {
     const plan = await this.prisma.plan.findUnique({ where: { id } });
     if (!plan) throw new NotFoundException('Plan not found');
   }
+}
+
+/**
+ * `limitsOverride` is a free-form JSON column a Super Admin edits by hand, so
+ * each key is only honoured when it has the right shape; anything else falls
+ * back to the plan's own value rather than, say, granting unlimited products
+ * because a typo made `maxProducts` a string.
+ */
+function applyLimitsOverride(base: PlanEntitlements, override: unknown): PlanEntitlements {
+  if (!override || typeof override !== 'object' || Array.isArray(override)) return base;
+  const o = override as Record<string, unknown>;
+  const isLimit = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= -1;
+  const methods = o.fulfillmentMethods;
+  return {
+    ...base,
+    maxStores: isLimit(o.maxStores) ? o.maxStores : base.maxStores,
+    maxProducts: isLimit(o.maxProducts) ? o.maxProducts : base.maxProducts,
+    fulfillmentMethods:
+      Array.isArray(methods) && methods.every((m) => FULFILLMENT_METHODS.includes(m))
+        ? [...new Set(methods as FulfillmentMethod[])]
+        : base.fulfillmentMethods,
+  };
 }

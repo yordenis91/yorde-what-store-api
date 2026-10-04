@@ -17,7 +17,8 @@ function buildService(options: { productCount?: number; plan?: { maxProducts: nu
 
   const prisma = { db: { product: { create, count }, $executeRaw: executeRaw } } as unknown as PrismaService;
   const plansService = {
-    currentSubscription: jest.fn().mockResolvedValue(options.plan ? { plan: options.plan } : null),
+    // null → no subscription row, i.e. PlansService's Free fallback of 20.
+    getEntitlements: jest.fn().mockResolvedValue({ maxProducts: options.plan?.maxProducts ?? 20 }),
   } as unknown as PlansService;
   const categoryTemplatesService = {} as CategoryTemplatesService;
 

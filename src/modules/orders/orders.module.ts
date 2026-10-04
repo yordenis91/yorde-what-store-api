@@ -6,12 +6,14 @@ import { OrderEventsService } from './order-events.service';
 import { EMAIL_QUEUE, ORDER_NOTIFICATION_QUEUE } from '../../queue/queue.constants';
 import { PaymentsModule } from '../payments/payments.module';
 import { AuditModule } from '../audit/audit.module';
+import { PlansModule } from '../plans/plans.module';
 
 @Module({
   imports: [
     BullModule.registerQueue({ name: ORDER_NOTIFICATION_QUEUE }, { name: EMAIL_QUEUE }),
     PaymentsModule,
     AuditModule,
+    PlansModule,
   ],
   controllers: [OrdersController, StorefrontOrdersController],
   providers: [OrdersService, OrderEventsService],

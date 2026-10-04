@@ -1,5 +1,5 @@
-import { IsArray, IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, Min } from 'class-validator';
-import { PlanDuration } from '@prisma/client';
+import { ArrayUnique, IsArray, IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { FulfillmentMethod, PlanDuration } from '@prisma/client';
 
 export class CreatePlanDto {
   @IsString()
@@ -21,6 +21,13 @@ export class CreatePlanDto {
   @IsOptional()
   @IsArray()
   features?: string[];
+
+  /** Checkout channels this plan unlocks. Omitted on create → WhatsApp only. */
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsEnum(FulfillmentMethod, { each: true })
+  fulfillmentMethods?: FulfillmentMethod[];
 
   @IsOptional()
   @IsBoolean()
@@ -52,6 +59,13 @@ export class UpdatePlanDto {
   @IsOptional()
   @IsArray()
   features?: string[];
+
+  /** Replaces the whole list. Stores already on this plan are affected immediately. */
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsEnum(FulfillmentMethod, { each: true })
+  fulfillmentMethods?: FulfillmentMethod[];
 
   @IsOptional()
   @IsBoolean()

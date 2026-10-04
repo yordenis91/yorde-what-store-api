@@ -21,10 +21,15 @@ export class UpdateTenantAdminDto {
   @Max(100)
   commissionRate?: number;
 
-  /** Patches specific plan-limit keys for this one tenant; unset keys keep using the Plan's own values. */
+  /**
+   * Patches specific plan limits for this one tenant; unset keys keep using
+   * the Plan's own values. Honoured keys: `maxProducts`, `maxStores` (integers,
+   * -1 = unlimited) and `fulfillmentMethods` (array of FulfillmentMethod, e.g.
+   * to grandfather a store that already sold through Stripe on Free).
+   */
   @IsOptional()
   @IsObject()
-  limitsOverride?: Record<string, number>;
+  limitsOverride?: Record<string, number | string[]>;
 
   @IsOptional()
   @IsObject()
