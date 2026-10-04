@@ -3,7 +3,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { CurrentTenantId, Public, Roles } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
 import { PlansService } from './plans.service';
-import { CreatePlanDto, UpdatePlanDto, SubscribeDto } from './dto';
+import { CreatePlanDto, UpdatePlanDto, SubscribeDto, RequestUpgradeDto } from './dto';
 
 @ApiTags('plans')
 @Controller('plans')
@@ -52,11 +52,17 @@ export class PlansController {
     return this.plansService.approveUpgrade(subscriptionId);
   }
 
+  @Roles('SUPER_ADMIN')
+  @Post(':id/reject-upgrade')
+  rejectUpgrade(@Param('id') subscriptionId: string) {
+    return this.plansService.rejectUpgrade(subscriptionId);
+  }
+
   @UseGuards(TenantRequiredGuard)
   @Roles('OWNER')
   @Get('current/subscription')
   currentSubscription(@CurrentTenantId() tenantId: string) {
-    return this.plansService.currentSubscription(tenantId);
+    return this.plansService.currentSubscriptionView(tenantId);
   }
 
   /** Effective limits (plan + per-tenant overrides), so the admin panel can show which channels are locked. */
@@ -77,7 +83,7 @@ export class PlansController {
   @UseGuards(TenantRequiredGuard)
   @Roles('OWNER')
   @Post('current/request-upgrade')
-  requestUpgrade(@CurrentTenantId() tenantId: string, @Body() dto: SubscribeDto) {
-    return this.plansService.requestUpgrade(tenantId, dto.planId);
+  requestUpgrade(@CurrentTenantId() tenantId: string, @Body() dto: RequestUpgradeDto) {
+    return this.plansService.requestUpgrade(tenantId, dto.planId, dto.paymentReference);
   }
 }

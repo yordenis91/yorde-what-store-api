@@ -6,6 +6,7 @@ import {
   INVENTORY_SYNC_QUEUE,
   INVOICE_PDF_QUEUE,
   ORDER_NOTIFICATION_QUEUE,
+  SUBSCRIPTION_LIFECYCLE_QUEUE,
   VISITS_CLEANUP_QUEUE,
 } from './queue.constants';
 import { EmailProcessor } from './processors/email.processor';
@@ -14,11 +15,13 @@ import { InventorySyncProcessor } from './processors/inventory-sync.processor';
 import { OrderNotificationProcessor } from './processors/order-notification.processor';
 import { VisitsCleanupProcessor } from './processors/visits-cleanup.processor';
 import { BackupProcessor } from './processors/backup.processor';
+import { SubscriptionLifecycleProcessor } from './processors/subscription-lifecycle.processor';
 import { EmailTemplatesModule } from '../modules/email-templates/email-templates.module';
 import { TenantsModule } from '../modules/tenants/tenants.module';
 import { PlatformSettingsModule } from '../modules/platform-settings/platform-settings.module';
 import { BackupsModule } from '../modules/backups/backups.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { BillingModule } from '../modules/billing/billing.module';
 
 @Module({
   imports: [
@@ -27,6 +30,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     PlatformSettingsModule,
     BackupsModule,
     NotificationsModule,
+    BillingModule,
     BullModule.registerQueue(
       { name: EMAIL_QUEUE },
       { name: INVOICE_PDF_QUEUE },
@@ -34,6 +38,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
       { name: ORDER_NOTIFICATION_QUEUE },
       { name: VISITS_CLEANUP_QUEUE },
       { name: BACKUP_QUEUE },
+      { name: SUBSCRIPTION_LIFECYCLE_QUEUE },
     ),
   ],
   providers: [
@@ -43,6 +48,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     OrderNotificationProcessor,
     VisitsCleanupProcessor,
     BackupProcessor,
+    SubscriptionLifecycleProcessor,
   ],
 })
 export class QueueModule {}

@@ -58,6 +58,34 @@ Todas las de `.env.example`. Tres merecen atención especial en producción:
   sin que se note ningún error. Usa el puerto 465 para TLS implícito o 587 para
   STARTTLS (ambos soportados); revisa los logs del worker tras el primer envío real.
 
+### Cobro de planes (vencimiento y renovación)
+
+Los planes de pago vencen en `expiresAt`. Un job horario (cola
+`subscription-lifecycle`, una sola réplica por disparo) manda por email a la
+persona dueña de la tienda un aviso 7 días y 1 día antes, otro al vencer, y tras
+**7 días de gracia** pasa la tienda al plan Gratis (no se borra nada). Estos
+correos salen siempre por el SMTP de la plataforma, nunca por el de la tienda.
+
+Hay dos formas de renovar:
+
+- **Manual (siempre disponible):** la tienda pide el plan o la renovación desde
+  *Planes*, con una referencia de pago opcional (p. ej. Zelle), y un Super
+  Admin la aprueba o rechaza en *Solicitudes de upgrade*. Una renovación
+  anticipada se suma a la fecha de vencimiento actual.
+- **Tarjeta con Stripe Billing (opcional):** se activa cuando están definidas
+  `STRIPE_SECRET_KEY` y `STRIPE_BILLING_WEBHOOK_SECRET`. Para obtener la segunda:
+  1. En Stripe → Developers → Webhooks, crea un **segundo** endpoint (distinto
+     del de pedidos) apuntando a `https://<api>/api/v1/billing/stripe/webhook`.
+  2. Suscríbelo a `checkout.session.completed`, `invoice.paid`,
+     `customer.subscription.updated` y `customer.subscription.deleted`.
+  3. Copia su *signing secret* en `STRIPE_BILLING_WEBHOOK_SECRET`.
+  4. En Stripe → Settings → Billing → Customer portal, activa el portal
+     (actualizar tarjeta, ver facturas, cancelar al final del periodo).
+
+  `PUBLIC_WEB_URL` es obligatoria para el cobro con tarjeta: Stripe exige URLs
+  absolutas para volver al panel. Los precios se cobran en USD con el precio del
+  plan; no hace falta crear productos ni precios en Stripe.
+
 ## Migraciones
 
 `docker-entrypoint.sh` ejecuta `prisma migrate deploy` en cada arranque. Solo

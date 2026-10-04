@@ -5,12 +5,17 @@ import * as nodemailer from 'nodemailer';
 import { EMAIL_QUEUE } from '../queue.constants';
 import { EmailTemplatesService } from '../../modules/email-templates/email-templates.service';
 import { renderTemplate } from '../../modules/email-templates/template-renderer';
-import { EmailTemplateKey } from '../../modules/email-templates/default-templates';
+import {
+  EmailTemplateKey,
+  isPlatformEmailKey,
+  PLATFORM_EMAIL_TEMPLATES,
+  PlatformEmailKey,
+} from '../../modules/email-templates/default-templates';
 import { TenantsService } from '../../modules/tenants/tenants.service';
 import { PlatformSettingsService } from '../../modules/platform-settings/platform-settings.service';
 
 export interface EmailJobData {
-  templateKey: EmailTemplateKey;
+  templateKey: EmailTemplateKey | PlatformEmailKey;
   tenantId: string;
   locale: string;
   to: string;
@@ -36,11 +41,16 @@ export class EmailProcessor extends WorkerHost {
       return;
     }
 
-    const template = await this.emailTemplates.resolveForSend(tenantId, templateKey, locale);
+    // Platform → store owner mail (plan billing) is the platform speaking, so
+    // it never uses the store's own templates or SMTP.
+    const platformTemplates = isPlatformEmailKey(templateKey) ? PLATFORM_EMAIL_TEMPLATES[templateKey] : null;
+    const template = platformTemplates
+      ? platformTemplates[locale?.startsWith('es') ? 'es' : 'en']
+      : await this.emailTemplates.resolveForSend(tenantId, templateKey as EmailTemplateKey, locale);
     const subject = renderTemplate(template.subject, variables);
     const body = renderTemplate(template.body, variables);
 
-    const tenantSmtp = await this.tenants.getDecryptedSmtpConfig(tenantId);
+    const tenantSmtp = platformTemplates ? null : await this.tenants.getDecryptedSmtpConfig(tenantId);
     // The platform default "from" still applies even when the tenant has a
     // host but no override of its own, so this is fetched whenever either
     // the host or the from-address might need to fall back to it.
