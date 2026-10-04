@@ -6,8 +6,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Prisma } from '@prisma/client';
+import { FulfillmentMethod, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PlansService } from '../plans/plans.service';
 import { decryptSecret, encryptSecret } from '../../common/utils/crypto.util';
 import { maskSmtpPassword } from '../../common/utils/mask-tenant-secrets.util';
 import { deleteUploadedFile } from '../uploads/uploads.util';
@@ -20,6 +21,7 @@ export class TenantsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly plansService: PlansService,
   ) {}
 
   async findMine(userId: string) {
@@ -76,11 +78,33 @@ export class TenantsService {
     // service). This lookup runs on the one request that discovers the
     // tenant by slug rather than starting with one already resolved, so no
     // such transaction is open yet — open one here and hand it in directly.
-    const zellePaymentInfo = await this.prisma.withTenant(tenant.id, (tx) =>
-      this.getDecryptedCredentials(tenant.id, 'ZELLE', tx),
-    );
+    const [zelleCredentials, enabledGateways, { fulfillmentMethods: allowed }] = await Promise.all([
+      this.prisma.withTenant(tenant.id, (tx) => this.getDecryptedCredentials(tenant.id, 'ZELLE', tx)),
+      this.prisma.withTenant(tenant.id, (tx) =>
+        tx.tenantPaymentSetting.findMany({
+          where: { tenantId: tenant.id, isEnabled: true, provider: { in: ['STRIPE', 'MERCADOPAGO'] } },
+          select: { provider: true },
+        }),
+      ),
+      this.plansService.getEntitlements(tenant.id),
+    ]);
 
-    return { ...tenant, zellePaymentInfo };
+    // A channel is offered only when the store configured it AND its plan
+    // includes it — a store that downgraded keeps its settings (so upgrading
+    // again restores them) but stops showing what it no longer pays for.
+    const whatsappEnabled = tenant.whatsappEnabled && allowed.includes('WHATSAPP');
+    const telegramEnabled = tenant.telegramEnabled && allowed.includes('TELEGRAM');
+    const zellePaymentInfo = allowed.includes('ZELLE') ? zelleCredentials : null;
+    const configured: Record<FulfillmentMethod, boolean> = {
+      WHATSAPP: whatsappEnabled,
+      TELEGRAM: telegramEnabled,
+      ZELLE: Boolean(zellePaymentInfo),
+      STRIPE: enabledGateways.some((g) => g.provider === 'STRIPE'),
+      MERCADOPAGO: enabledGateways.some((g) => g.provider === 'MERCADOPAGO'),
+    };
+    const checkoutMethods = allowed.filter((m) => configured[m]);
+
+    return { ...tenant, whatsappEnabled, telegramEnabled, zellePaymentInfo, checkoutMethods };
   }
 
   async createAdditional(userId: string, dto: CreateTenantDto) {
@@ -120,8 +144,17 @@ export class TenantsService {
     }
     const previous = await this.prisma.db.tenant.findUnique({
       where: { id: tenantId },
-      select: { logoUrl: true, bannerUrl: true, invoiceLogoUrl: true },
+      select: { logoUrl: true, bannerUrl: true, invoiceLogoUrl: true, whatsappEnabled: true, telegramEnabled: true },
     });
+    // Only on the off → on transition: the settings form resends every field,
+    // so checking `=== true` alone would block any unrelated save for a store
+    // that downgraded with a channel still switched on.
+    if (dto.whatsappEnabled === true && !previous?.whatsappEnabled) {
+      await this.plansService.assertFulfillmentMethodAllowed(tenantId, 'WHATSAPP');
+    }
+    if (dto.telegramEnabled === true && !previous?.telegramEnabled) {
+      await this.plansService.assertFulfillmentMethodAllowed(tenantId, 'TELEGRAM');
+    }
     const tenant = await this.prisma.db.tenant.update({ where: { id: tenantId }, data: data as any });
 
     // Replacing (or clearing) a stored image leaves the old file on disk
@@ -154,6 +187,17 @@ export class TenantsService {
   }
 
   async upsertPaymentSetting(tenantId: string, dto: UpsertPaymentSettingDto) {
+    if (dto.isEnabled) {
+      const existing = await this.prisma.db.tenantPaymentSetting.findUnique({
+        where: { tenantId_provider: { tenantId, provider: dto.provider } },
+        select: { isEnabled: true },
+      });
+      // Same off → on rule as update(): re-saving an already enabled
+      // provider's credentials after a downgrade is not blocked.
+      if (!existing?.isEnabled) {
+        await this.plansService.assertFulfillmentMethodAllowed(tenantId, dto.provider);
+      }
+    }
     const secret = this.config.get<string>('security.encryptionKey')!;
     const encrypted = encryptSecret(JSON.stringify(dto.credentials), secret);
 

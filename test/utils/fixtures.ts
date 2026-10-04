@@ -5,7 +5,18 @@ import { PrismaService } from '../../src/prisma/prisma.service';
  * doesn't belong to one — so these writes need no app.tenant_id / bypass_rls
  * at all. Only tenant-scoped tables (products, orders, …) need that.
  */
-export async function seedTenant(prisma: PrismaService, overrides: { slug: string; tracksInventory?: boolean }) {
+/**
+ * Seeded stores have no subscription, i.e. Free limits, whose only checkout
+ * channel is WhatsApp. Suites that order through Stripe or another channel
+ * aren't testing plans, so every channel is unlocked through limitsOverride —
+ * the same knob a Super Admin uses — unless a test passes its own.
+ */
+const ALL_CHANNELS = ['WHATSAPP', 'TELEGRAM', 'STRIPE', 'MERCADOPAGO', 'ZELLE'];
+
+export async function seedTenant(
+  prisma: PrismaService,
+  overrides: { slug: string; tracksInventory?: boolean; fulfillmentMethods?: string[] },
+) {
   const owner = await prisma.user.create({
     data: { email: `${overrides.slug}-owner@test.com`, passwordHash: 'x', name: 'Owner' },
   });
@@ -15,6 +26,7 @@ export async function seedTenant(prisma: PrismaService, overrides: { slug: strin
       slug: overrides.slug,
       ownerId: owner.id,
       tracksInventory: overrides.tracksInventory ?? false,
+      limitsOverride: { fulfillmentMethods: overrides.fulfillmentMethods ?? ALL_CHANNELS },
       members: { create: { userId: owner.id, role: 'OWNER' } },
     },
   });

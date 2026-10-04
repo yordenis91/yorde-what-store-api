@@ -10,6 +10,7 @@ import { OrdersService } from './orders.service';
 import { OrderQueryDto } from './dto';
 import { OrderEvent, OrderEventsService } from './order-events.service';
 import { PaymentsService } from '../payments/payments.service';
+import { PlansService } from '../plans/plans.service';
 
 /**
  * These run against a hand-built Prisma double rather than a database. That
@@ -135,6 +136,7 @@ async function buildService(
   double: ReturnType<typeof createPrismaDouble>,
   paymentsService?: Partial<PaymentsService>,
   emailQueue: { add: jest.Mock } = { add: jest.fn() },
+  allowedMethods: string[] = ['WHATSAPP', 'TELEGRAM', 'STRIPE', 'MERCADOPAGO', 'ZELLE'],
 ) {
   const moduleRef = await Test.createTestingModule({
     providers: [
@@ -144,6 +146,10 @@ async function buildService(
       { provide: getQueueToken(ORDER_NOTIFICATION_QUEUE), useValue: { add: jest.fn() } },
       { provide: getQueueToken(EMAIL_QUEUE), useValue: emailQueue },
       { provide: PaymentsService, useValue: { refundOrderPayment: jest.fn(), ...paymentsService } },
+      {
+        provide: PlansService,
+        useValue: { getEntitlements: jest.fn().mockResolvedValue({ fulfillmentMethods: allowedMethods }) },
+      },
       {
         provide: ConfigService,
         useValue: { get: (key: string) => (key === 'app.publicWebUrl' ? 'https://yws.example.com' : undefined) },
@@ -344,6 +350,27 @@ describe('OrdersService pricing', () => {
     const service = await buildService(createPrismaDouble({ products: [] }));
 
     await expect(service.create(TENANT_ID, baseOrder)).rejects.toThrow(BadRequestException);
+  });
+});
+
+/**
+ * The storefront hides channels a store's plan doesn't include, but the order
+ * request can still name any of them — this is the check that actually holds.
+ */
+describe('OrdersService plan restrictions', () => {
+  it('rejects an order through a channel the plan does not include, before writing anything', async () => {
+    const double = createPrismaDouble({ products: [buildProduct()] });
+    const service = await buildService(double, undefined, undefined, ['WHATSAPP']);
+
+    await expect(service.create(TENANT_ID, baseOrder)).rejects.toThrow(BadRequestException);
+    expect(double.db.order.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts an order through a channel the plan includes', async () => {
+    const double = createPrismaDouble({ products: [buildProduct()] });
+    const service = await buildService(double, undefined, undefined, ['STRIPE']);
+
+    await expect(service.create(TENANT_ID, baseOrder)).resolves.toBeDefined();
   });
 });
 

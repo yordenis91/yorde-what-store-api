@@ -1,5 +1,7 @@
 import { ConfigService } from '@nestjs/config';
+import { ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PlansService } from '../plans/plans.service';
 import { deleteUploadedFile } from '../uploads/uploads.util';
 import { TenantsService } from './tenants.service';
 
@@ -9,7 +11,12 @@ const TENANT_ID = 'tenant-1';
 const ENCRYPTION_KEY = 'test-encryption-key';
 
 function buildService(
-  options: { existingTenant?: Record<string, unknown>; imageFields?: Record<string, unknown> } = {},
+  options: {
+    existingTenant?: Record<string, unknown>;
+    imageFields?: Record<string, unknown>;
+    allowedMethods?: string[];
+    existingPaymentSetting?: Record<string, unknown> | null;
+  } = {},
 ) {
   const update = jest
     .fn()
@@ -17,15 +24,27 @@ function buildService(
   const findUnique = jest.fn().mockResolvedValue(options.existingTenant ?? null);
   const dbFindUnique = jest.fn().mockResolvedValue(options.imageFields ?? null);
 
+  const paymentUpsert = jest.fn().mockImplementation(({ create }) => Promise.resolve(create));
+  const paymentFindUnique = jest.fn().mockResolvedValue(options.existingPaymentSetting ?? null);
+
   const prisma = {
-    db: { tenant: { update, findUnique: dbFindUnique } },
+    db: {
+      tenant: { update, findUnique: dbFindUnique },
+      tenantPaymentSetting: { upsert: paymentUpsert, findUnique: paymentFindUnique },
+    },
     tenant: { findUnique },
   } as unknown as PrismaService;
 
   const config = { get: () => ENCRYPTION_KEY } as unknown as ConfigService;
+  const allowedMethods = options.allowedMethods ?? ['WHATSAPP', 'TELEGRAM', 'STRIPE', 'MERCADOPAGO', 'ZELLE'];
+  const plansService = {
+    assertFulfillmentMethodAllowed: jest.fn().mockImplementation(async (_tenantId: string, method: string) => {
+      if (!allowedMethods.includes(method)) throw new ForbiddenException();
+    }),
+  } as unknown as PlansService;
 
-  const service = new TenantsService(prisma, config);
-  return { service, update, findUnique, dbFindUnique };
+  const service = new TenantsService(prisma, config, plansService);
+  return { service, update, findUnique, dbFindUnique, paymentUpsert };
 }
 
 describe('TenantsService.update — SMTP password handling', () => {
@@ -106,6 +125,51 @@ describe('TenantsService.update — stale image cleanup', () => {
     await service.update(TENANT_ID, { logoUrl: '/uploads/tenant-1/same.webp' });
 
     expect(deleteUploadedFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('TenantsService plan restrictions', () => {
+  it('refuses to switch on a channel the plan does not include', async () => {
+    const { service, update } = buildService({ allowedMethods: ['WHATSAPP'] });
+
+    await expect(service.update(TENANT_ID, { telegramEnabled: true })).rejects.toThrow(ForbiddenException);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('still saves unrelated settings for a store that downgraded with the channel left on', async () => {
+    const { service, update } = buildService({
+      allowedMethods: ['WHATSAPP'],
+      imageFields: { telegramEnabled: true },
+    });
+
+    await service.update(TENANT_ID, { telegramEnabled: true, tagline: 'New tagline' });
+
+    expect(update).toHaveBeenCalled();
+  });
+
+  it('refuses to enable a payment provider the plan does not include', async () => {
+    const { service, paymentUpsert } = buildService({ allowedMethods: ['WHATSAPP'] });
+
+    await expect(
+      service.upsertPaymentSetting(TENANT_ID, {
+        provider: 'STRIPE',
+        credentials: { secretKey: 'sk' },
+        isEnabled: true,
+      }),
+    ).rejects.toThrow(ForbiddenException);
+    expect(paymentUpsert).not.toHaveBeenCalled();
+  });
+
+  it('lets a store save a provider disabled regardless of plan', async () => {
+    const { service, paymentUpsert } = buildService({ allowedMethods: ['WHATSAPP'] });
+
+    await service.upsertPaymentSetting(TENANT_ID, {
+      provider: 'STRIPE',
+      credentials: { secretKey: 'sk' },
+      isEnabled: false,
+    });
+
+    expect(paymentUpsert).toHaveBeenCalled();
   });
 });
 

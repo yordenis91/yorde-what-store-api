@@ -59,6 +59,14 @@ export class PlansController {
     return this.plansService.currentSubscription(tenantId);
   }
 
+  /** Effective limits (plan + per-tenant overrides), so the admin panel can show which channels are locked. */
+  @UseGuards(TenantRequiredGuard)
+  @Roles('OWNER', 'STAFF')
+  @Get('current/entitlements')
+  currentEntitlements(@CurrentTenantId() tenantId: string) {
+    return this.plansService.getEntitlements(tenantId);
+  }
+
   @UseGuards(TenantRequiredGuard)
   @Roles('OWNER')
   @Post('current/subscribe')
