@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { BillingProvider, FulfillmentMethod } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { getScopedClient } from '../../prisma/tenant-context';
 import { CreatePlanDto, UpdatePlanDto } from './dto';
 import { graceEndsAt, isLapsed, isPaidPlan } from './subscription-lifecycle.util';
 
@@ -37,26 +38,40 @@ export const FALLBACK_ENTITLEMENTS: Omit<PlanEntitlements, 'planId' | 'planName'
 export class PlansService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * The request's own transaction when there is one, else the plain client.
+   * Plans, subscriptions and tenants carry no RLS, so either sees the same
+   * rows — but reaching for the plain client from inside a request takes a
+   * second pool connection while the request's transaction still holds the
+   * first. getEntitlements runs on every order, so under load (or with
+   * connection_limit=1, as in the e2e suite) that starved the pool (P2024).
+   * Called on the client itself rather than through `prisma.db`, whose
+   * fallback is broken outside a request (see PrismaService.db).
+   */
+  private get client() {
+    return getScopedClient(this.prisma);
+  }
+
   listActive() {
-    return this.prisma.plan.findMany({ where: { isActive: true }, orderBy: { price: 'asc' } });
+    return this.client.plan.findMany({ where: { isActive: true }, orderBy: { price: 'asc' } });
   }
 
   listAll() {
-    return this.prisma.plan.findMany({ orderBy: { price: 'asc' } });
+    return this.client.plan.findMany({ orderBy: { price: 'asc' } });
   }
 
   create(dto: CreatePlanDto) {
-    return this.prisma.plan.create({ data: dto as any });
+    return this.client.plan.create({ data: dto as any });
   }
 
   async update(id: string, dto: UpdatePlanDto) {
     await this.ensureExists(id);
-    return this.prisma.plan.update({ where: { id }, data: dto as any });
+    return this.client.plan.update({ where: { id }, data: dto as any });
   }
 
   async remove(id: string) {
     await this.ensureExists(id);
-    await this.prisma.plan.update({ where: { id }, data: { isActive: false } });
+    await this.client.plan.update({ where: { id }, data: { isActive: false } });
     return { deactivated: true };
   }
 
@@ -67,7 +82,7 @@ export class PlansService {
    * plan's id and get it for free.
    */
   async subscribe(tenantId: string, planId: string) {
-    const plan = await this.prisma.plan.findFirst({ where: { id: planId, isActive: true } });
+    const plan = await this.client.plan.findFirst({ where: { id: planId, isActive: true } });
     if (!plan) throw new NotFoundException('Plan not found');
     if (Number(plan.price) > 0) {
       throw new ForbiddenException('Paid plans must be requested as an upgrade and approved by the platform');
@@ -86,13 +101,13 @@ export class PlansService {
     // PENDING_UPGRADE too: otherwise a store with an open upgrade request
     // would get a second subscription row here, and approving the request
     // later would update a row currentSubscription no longer reads.
-    const existing = await this.prisma.subscription.findFirst({
+    const existing = await this.client.subscription.findFirst({
       where: { tenantId, status: { in: ['ACTIVE', 'PENDING_UPGRADE'] } },
       orderBy: { createdAt: 'desc' },
     });
 
     if (existing) {
-      return this.prisma.subscription.update({
+      return this.client.subscription.update({
         where: { id: existing.id },
         data: {
           planId,
@@ -105,7 +120,7 @@ export class PlansService {
         },
       });
     }
-    return this.prisma.subscription.create({ data: { tenantId, planId, expiresAt, status: 'ACTIVE' } });
+    return this.client.subscription.create({ data: { tenantId, planId, expiresAt, status: 'ACTIVE' } });
   }
 
   /**
@@ -117,7 +132,7 @@ export class PlansService {
   async getEntitlements(tenantId: string): Promise<PlanEntitlements> {
     const [subscription, tenant] = await Promise.all([
       this.currentSubscription(tenantId),
-      this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { limitsOverride: true } }),
+      this.client.tenant.findUnique({ where: { id: tenantId }, select: { limitsOverride: true } }),
     ]);
     const plan = subscription && !isLapsed(subscription) ? subscription.plan : undefined;
     const base: PlanEntitlements = plan
@@ -140,7 +155,7 @@ export class PlansService {
   }
 
   async currentSubscription(tenantId: string) {
-    return this.prisma.subscription.findFirst({
+    return this.client.subscription.findFirst({
       where: { tenantId },
       include: { plan: true },
       orderBy: { createdAt: 'desc' },
@@ -165,7 +180,7 @@ export class PlansService {
    * approves it. Requesting the current plan again is a renewal.
    */
   async requestUpgrade(tenantId: string, planId: string, paymentReference?: string) {
-    const plan = await this.prisma.plan.findFirst({ where: { id: planId, isActive: true } });
+    const plan = await this.client.plan.findFirst({ where: { id: planId, isActive: true } });
     if (!plan) throw new NotFoundException('Plan not found');
     if (!isPaidPlan(plan)) throw new BadRequestException('Free plans are switched to directly, without a request');
 
@@ -178,13 +193,13 @@ export class PlansService {
     if (!current) {
       const freePlan = await this.findFreePlan();
       if (!freePlan) throw new BadRequestException('No subscription to upgrade from');
-      current = await this.prisma.subscription.create({
+      current = await this.client.subscription.create({
         data: { tenantId, planId: freePlan.id, status: 'ACTIVE' },
         include: { plan: true },
       });
     }
 
-    return this.prisma.subscription.update({
+    return this.client.subscription.update({
       where: { id: current.id },
       data: {
         requestedPlanId: planId,
@@ -195,7 +210,7 @@ export class PlansService {
   }
 
   async listUpgradeRequests() {
-    const requests = await this.prisma.subscription.findMany({
+    const requests = await this.client.subscription.findMany({
       where: { status: 'PENDING_UPGRADE' },
       include: { tenant: { select: { id: true, name: true, slug: true } }, plan: true },
       orderBy: { createdAt: 'desc' },
@@ -203,7 +218,7 @@ export class PlansService {
 
     const requestedPlanIds = [...new Set(requests.map((r) => r.requestedPlanId).filter((id): id is string => !!id))];
     const requestedPlans = requestedPlanIds.length
-      ? await this.prisma.plan.findMany({ where: { id: { in: requestedPlanIds } } })
+      ? await this.client.plan.findMany({ where: { id: { in: requestedPlanIds } } })
       : [];
     const requestedPlanById = new Map(requestedPlans.map((p) => [p.id, p]));
 
@@ -225,7 +240,7 @@ export class PlansService {
    * change of plan (or a lapsed one) starts a fresh period today.
    */
   async approveUpgrade(subscriptionId: string) {
-    const subscription = await this.prisma.subscription.findUniqueOrThrow({
+    const subscription = await this.client.subscription.findUniqueOrThrow({
       where: { id: subscriptionId },
       include: { plan: true },
     });
@@ -233,7 +248,7 @@ export class PlansService {
       throw new BadRequestException('No pending upgrade request');
     }
 
-    const plan = await this.prisma.plan.findUniqueOrThrow({ where: { id: subscription.requestedPlanId } });
+    const plan = await this.client.plan.findUniqueOrThrow({ where: { id: subscription.requestedPlanId } });
     const now = new Date();
     const isRenewal =
       subscription.planId === plan.id &&
@@ -242,7 +257,7 @@ export class PlansService {
       !isLapsed(subscription, now);
     const from = isRenewal ? subscription.expiresAt! : now;
 
-    return this.prisma.subscription.update({
+    return this.client.subscription.update({
       where: { id: subscriptionId },
       data: {
         planId: plan.id,
@@ -258,10 +273,10 @@ export class PlansService {
 
   /** Declines a request (payment never arrived, wrong amount…): the store keeps its current plan. */
   async rejectUpgrade(subscriptionId: string) {
-    const subscription = await this.prisma.subscription.findUniqueOrThrow({ where: { id: subscriptionId } });
+    const subscription = await this.client.subscription.findUniqueOrThrow({ where: { id: subscriptionId } });
     if (subscription.status !== 'PENDING_UPGRADE') throw new BadRequestException('No pending upgrade request');
 
-    return this.prisma.subscription.update({
+    return this.client.subscription.update({
       where: { id: subscriptionId },
       data: { status: 'ACTIVE', requestedPlanId: null, requestedPaymentReference: null },
     });
@@ -294,13 +309,13 @@ export class PlansService {
       ...billing,
     };
     const current = await this.currentSubscription(tenantId);
-    if (current) return this.prisma.subscription.update({ where: { id: current.id }, data });
-    return this.prisma.subscription.create({ data: { tenantId, ...data } });
+    if (current) return this.client.subscription.update({ where: { id: current.id }, data });
+    return this.client.subscription.create({ data: { tenantId, ...data } });
   }
 
   /** The plan a lapsed store is moved to: the oldest active free plan (the seeded "Free"). */
   findFreePlan() {
-    return this.prisma.plan.findFirst({ where: { isActive: true, price: 0 }, orderBy: { createdAt: 'asc' } });
+    return this.client.plan.findFirst({ where: { isActive: true, price: 0 }, orderBy: { createdAt: 'asc' } });
   }
 
   /**
@@ -331,7 +346,7 @@ export class PlansService {
   }
 
   private async ensureExists(id: string) {
-    const plan = await this.prisma.plan.findUnique({ where: { id } });
+    const plan = await this.client.plan.findUnique({ where: { id } });
     if (!plan) throw new NotFoundException('Plan not found');
   }
 }

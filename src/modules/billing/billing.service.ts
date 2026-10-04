@@ -9,6 +9,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
 import { PrismaService } from '../../prisma/prisma.service';
+import { getScopedClient } from '../../prisma/tenant-context';
 import { adminPlansLink } from '../../common/utils/public-links';
 import { PlansService } from '../plans/plans.service';
 import { isPaidPlan } from '../plans/subscription-lifecycle.util';
@@ -37,6 +38,20 @@ export class BillingService {
     this.stripe = secretKey ? new Stripe(secretKey) : null;
   }
 
+  /**
+   * The request's own transaction when there is one, else the plain client.
+   * Plans, subscriptions and tenants carry no RLS, so either sees the same
+   * rows — but reaching for the plain client from inside a request takes a
+   * second pool connection while the request's transaction still holds the
+   * first. getEntitlements runs on every order, so under load (or with
+   * connection_limit=1, as in the e2e suite) that starved the pool (P2024).
+   * Called on the client itself rather than through `prisma.db`, whose
+   * fallback is broken outside a request (see PrismaService.db).
+   */
+  private get client() {
+    return getScopedClient(this.prisma);
+  }
+
   get cardBillingEnabled(): boolean {
     return !!this.stripe && !!this.config.get<string>('stripe.billingWebhookSecret');
   }
@@ -48,7 +63,7 @@ export class BillingService {
   /** Starts a Stripe Checkout for a paid plan: a recurring subscription, or a one-off payment for a lifetime plan. */
   async createCheckout(tenantId: string, planId: string) {
     const stripe = this.requireStripe();
-    const plan = await this.prisma.plan.findFirst({ where: { id: planId, isActive: true } });
+    const plan = await this.client.plan.findFirst({ where: { id: planId, isActive: true } });
     if (!plan) throw new NotFoundException('Plan not found');
     if (!isPaidPlan(plan)) throw new BadRequestException('Free plans are switched to directly, without payment');
 
@@ -59,7 +74,7 @@ export class BillingService {
       throw new ConflictException('This store is already paying for this plan by card');
     }
 
-    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+    const tenant = await this.client.tenant.findUniqueOrThrow({
       where: { id: tenantId },
       select: { owner: { select: { email: true } } },
     });
@@ -223,7 +238,7 @@ export class BillingService {
 
   /** Cancel / un-cancel from the portal: only whether it renews changes; expiresAt moves with invoice.paid. */
   private async onSubscriptionUpdated(subscription: Stripe.Subscription) {
-    await this.prisma.subscription.updateMany({
+    await this.client.subscription.updateMany({
       where: { stripeSubscriptionId: subscription.id },
       data: { cancelAtPeriodEnd: subscription.cancel_at_period_end },
     });
@@ -235,7 +250,7 @@ export class BillingService {
    * grace period and downgrade apply, same as an unrenewed manual plan.
    */
   private async onSubscriptionDeleted(subscription: Stripe.Subscription) {
-    await this.prisma.subscription.updateMany({
+    await this.client.subscription.updateMany({
       where: { stripeSubscriptionId: subscription.id },
       data: { stripeSubscriptionId: null, billingProvider: 'MANUAL', cancelAtPeriodEnd: false },
     });
