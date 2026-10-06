@@ -313,6 +313,30 @@ export class PlansService {
     return this.client.subscription.create({ data: { tenantId, ...data } });
   }
 
+  /**
+   * After an automatic downgrade a store can have more live products than its
+   * new plan allows (the manual switch refuses that, an expiry cannot). Keeps
+   * the oldest `maxProducts` live and unpublishes the rest — nothing is
+   * deleted, so upgrading again and republishing restores them. Returns how
+   * many were hidden.
+   */
+  async hideProductsOverLimit(tenantId: string): Promise<number> {
+    const { maxProducts } = await this.getEntitlements(tenantId);
+    if (maxProducts === -1) return 0;
+
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const excess = await tx.product.findMany({
+        where: { tenantId, isActive: true, isPublished: true },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        skip: maxProducts,
+        select: { id: true },
+      });
+      if (excess.length === 0) return 0;
+      await tx.product.updateMany({ where: { id: { in: excess.map((p) => p.id) } }, data: { isPublished: false } });
+      return excess.length;
+    });
+  }
+
   /** The plan a lapsed store is moved to: the oldest active free plan (the seeded "Free"). */
   findFreePlan() {
     return this.client.plan.findFirst({ where: { isActive: true, price: 0 }, orderBy: { createdAt: 'asc' } });

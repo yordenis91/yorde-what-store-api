@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -19,6 +20,8 @@ const IMAGE_FIELDS = ['logoUrl', 'bannerUrl', 'invoiceLogoUrl'] as const;
 
 @Injectable()
 export class TenantsService {
+  private readonly logger = new Logger(TenantsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
@@ -80,7 +83,14 @@ export class TenantsService {
     // tenant by slug rather than starting with one already resolved, so no
     // such transaction is open yet — open one here and hand it in directly.
     const [zelleCredentials, enabledGateways, { fulfillmentMethods: allowed }] = await Promise.all([
-      this.prisma.withTenant(tenant.id, (tx) => this.getDecryptedCredentials(tenant.id, 'ZELLE', tx)),
+      this.prisma
+        .withTenant(tenant.id, (tx) => this.getDecryptedCredentials(tenant.id, 'ZELLE', tx))
+        // One unreadable payment row must not take the whole storefront down:
+        // the store just stops offering Zelle until the owner saves it again.
+        .catch((err: Error) => {
+          this.logger.warn(`Zelle credentials unreadable for tenant ${tenant.id}: ${err.message}`);
+          return null;
+        }),
       this.prisma.withTenant(tenant.id, (tx) =>
         tx.tenantPaymentSetting.findMany({
           where: { tenantId: tenant.id, isEnabled: true, provider: { in: ['STRIPE', 'MERCADOPAGO'] } },
