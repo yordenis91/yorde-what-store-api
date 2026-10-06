@@ -336,6 +336,56 @@ describe('Plan enforcement (e2e)', () => {
     });
   });
 
+  describe('payment settings without resending credentials', () => {
+    const put = (token: Record<string, string>, body: object) =>
+      request(app.getHttpServer()).put('/api/v1/tenants/current/payment-settings').set(token).send(body);
+    const zelle = { recipientName: 'Ana', recipientEmail: 'ana@zelle.com' };
+    const storefront = (slug: string) => request(app.getHttpServer()).get(`/api/v1/tenants/storefront/${slug}`);
+
+    it('switches a configured provider off and on again keeping its stored credentials', async () => {
+      const { token } = await storeOn('pay-toggle', proPlan.id);
+      await put(token, { provider: 'ZELLE', credentials: zelle, isEnabled: true }).expect(200);
+
+      await put(token, { provider: 'ZELLE', isEnabled: false }).expect(200);
+      expect((await storefront('pay-toggle').expect(200)).body.data.checkoutMethods).toEqual([]);
+
+      await put(token, { provider: 'ZELLE', isEnabled: true }).expect(200);
+      const back = (await storefront('pay-toggle').expect(200)).body.data;
+      expect(back.checkoutMethods).toEqual(['ZELLE']);
+      expect(back.zellePaymentInfo).toMatchObject(zelle);
+    });
+
+    it('still replaces the credentials when new ones are sent', async () => {
+      const { token } = await storeOn('pay-replace', proPlan.id);
+      await put(token, { provider: 'ZELLE', credentials: zelle, isEnabled: true }).expect(200);
+      await put(token, {
+        provider: 'ZELLE',
+        credentials: { recipientName: 'Bea', recipientEmail: 'bea@zelle.com' },
+        isEnabled: true,
+      }).expect(200);
+      expect((await storefront('pay-replace').expect(200)).body.data.zellePaymentInfo).toMatchObject({
+        recipientName: 'Bea',
+      });
+    });
+
+    it('needs credentials the first time, and never accepts an empty set', async () => {
+      const { token } = await storeOn('pay-first', proPlan.id);
+      await put(token, { provider: 'ZELLE', isEnabled: true }).expect(400);
+      await put(token, { provider: 'ZELLE', credentials: {}, isEnabled: true }).expect(400);
+      await put(token, { provider: 'ZELLE', credentials: zelle, isEnabled: true }).expect(200);
+      await put(token, { provider: 'ZELLE', credentials: {}, isEnabled: true }).expect(400);
+      expect((await storefront('pay-first').expect(200)).body.data.zellePaymentInfo).toMatchObject(zelle);
+    });
+
+    it('cannot switch on, without credentials, a provider the plan does not include', async () => {
+      const { token, subscription } = await storeOn('pay-locked', proPlan.id);
+      await put(token, { provider: 'ZELLE', credentials: zelle, isEnabled: false }).expect(200);
+      await prisma.subscription.update({ where: { id: subscription.id }, data: { planId: freePlan.id } });
+      await put(token, { provider: 'ZELLE', isEnabled: true }).expect(403);
+      await put(token, { provider: 'ZELLE', isEnabled: false }).expect(200);
+    });
+  });
+
   describe('expiry job', () => {
     it('inside the grace period the store keeps the paid channels; after it, Free', async () => {
       const { token, tenant, subscription } = await storeOn('exp', proPlan.id, {

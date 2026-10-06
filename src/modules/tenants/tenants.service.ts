@@ -192,25 +192,41 @@ export class TenantsService {
   }
 
   async upsertPaymentSetting(tenantId: string, dto: UpsertPaymentSettingDto) {
-    if (dto.isEnabled) {
-      const existing = await this.prisma.db.tenantPaymentSetting.findUnique({
-        where: { tenantId_provider: { tenantId, provider: dto.provider } },
-        select: { isEnabled: true },
-      });
-      // Same off → on rule as update(): re-saving an already enabled
-      // provider's credentials after a downgrade is not blocked.
-      if (!existing?.isEnabled) {
-        await this.plansService.assertFulfillmentMethodAllowed(tenantId, dto.provider);
-      }
+    const existing = await this.prisma.db.tenantPaymentSetting.findUnique({
+      where: { tenantId_provider: { tenantId, provider: dto.provider } },
+      select: { isEnabled: true },
+    });
+    const select = { id: true, provider: true, isEnabled: true, createdAt: true, updatedAt: true } as const;
+    const { credentials } = dto;
+
+    // Same off → on rule as update(): re-saving an already enabled provider
+    // after a downgrade is not blocked, switching a locked one on is.
+    if (dto.isEnabled && !existing?.isEnabled) {
+      await this.plansService.assertFulfillmentMethodAllowed(tenantId, dto.provider);
     }
+
+    if (credentials === undefined) {
+      // Only the flag changes; the stored (encrypted, never returned) credentials stay.
+      if (!existing) throw new BadRequestException(`Credentials are required to set up ${dto.provider}`);
+      return this.prisma.db.tenantPaymentSetting.update({
+        where: { tenantId_provider: { tenantId, provider: dto.provider } },
+        data: { isEnabled: dto.isEnabled },
+        select,
+      });
+    }
+    // An empty object would silently replace working credentials with nothing.
+    if (Object.keys(credentials).length === 0) {
+      throw new BadRequestException('Credentials cannot be empty');
+    }
+
     const secret = this.config.get<string>('security.encryptionKey')!;
-    const encrypted = encryptSecret(JSON.stringify(dto.credentials), secret);
+    const encrypted = encryptSecret(JSON.stringify(credentials), secret);
 
     return this.prisma.db.tenantPaymentSetting.upsert({
       where: { tenantId_provider: { tenantId, provider: dto.provider } },
       create: { tenantId, provider: dto.provider, credentials: { encrypted }, isEnabled: dto.isEnabled },
       update: { credentials: { encrypted }, isEnabled: dto.isEnabled },
-      select: { id: true, provider: true, isEnabled: true, createdAt: true, updatedAt: true },
+      select,
     });
   }
 
