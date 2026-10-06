@@ -386,6 +386,82 @@ describe('Plan enforcement (e2e)', () => {
     });
   });
 
+  describe('downgrade over the product limit', () => {
+    async function liveProducts(tenantId: string, count: number) {
+      const ids: string[] = [];
+      for (let n = 1; n <= count; n++) {
+        const product = await seedProduct(prisma, tenantId, { name: `P${n}`, sku: `P-${n}`, price: '5', quantity: 1 });
+        // Oldest first, deterministically.
+        await prisma.withTenant(tenantId, (tx) =>
+          tx.product.update({ where: { id: product.id }, data: { createdAt: new Date(Date.UTC(2026, 0, n)) } }),
+        );
+        ids.push(product.id);
+      }
+      return ids;
+    }
+    const publishedIds = (tenantId: string) =>
+      prisma
+        .withTenant(tenantId, (tx) =>
+          tx.product.findMany({ where: { isPublished: true }, orderBy: { createdAt: 'asc' }, select: { id: true } }),
+        )
+        .then((rows) => rows.map((r) => r.id));
+    const patch = (token: Record<string, string>, id: string, body: object) =>
+      request(app.getHttpServer()).patch(`/api/v1/products/${id}`).set(token).send(body);
+
+    it('keeps the oldest products live up to the Free limit and unpublishes the rest, deleting nothing', async () => {
+      const { tenant } = await storeOn('dg-hide', proPlan.id, { expiresAt: new Date(Date.now() - 9 * DAY) });
+      const ids = await liveProducts(tenant.id, 5);
+
+      await app.get(SubscriptionLifecycleService).run();
+
+      expect(await publishedIds(tenant.id)).toEqual(ids.slice(0, 2));
+      const total = await prisma.withTenant(tenant.id, (tx) => tx.product.count());
+      expect(total).toBe(5);
+    });
+
+    it('does nothing to a store already within the Free limit, nor to an unlimited one', async () => {
+      const small = await storeOn('dg-small', proPlan.id, { expiresAt: new Date(Date.now() - 9 * DAY) });
+      const smallIds = await liveProducts(small.tenant.id, 2);
+      await app.get(SubscriptionLifecycleService).run();
+      expect(await publishedIds(small.tenant.id)).toEqual(smallIds);
+    });
+
+    it('does not let the hidden products simply be switched back on, but allows swapping one for another', async () => {
+      const { tenant, token } = await storeOn('dg-swap', proPlan.id, { expiresAt: new Date(Date.now() - 9 * DAY) });
+      const ids = await liveProducts(tenant.id, 4);
+      await app.get(SubscriptionLifecycleService).run();
+
+      await patch(token, ids[3], { isPublished: true }).expect(403);
+      await patch(token, ids[0], { isPublished: false }).expect(200);
+      await patch(token, ids[3], { isPublished: true }).expect(200);
+      expect(await publishedIds(tenant.id)).toEqual([ids[1], ids[3]]);
+    });
+
+    it('a store within its limit can hide and republish freely', async () => {
+      const { tenant, token } = await storeOn('dg-free', freePlan.id);
+      const ids = await liveProducts(tenant.id, 2);
+      await patch(token, ids[0], { isPublished: false }).expect(200);
+      await patch(token, ids[0], { isPublished: true }).expect(200);
+    });
+  });
+
+  describe('storefront with unreadable payment credentials', () => {
+    it('still opens, and just stops offering Zelle', async () => {
+      const { tenant } = await storeOn('zelle-bad', proPlan.id);
+      // Stored credentials that cannot be decrypted (no `encrypted` blob).
+      await prisma.withTenant(tenant.id, (tx) =>
+        tx.tenantPaymentSetting.create({
+          data: { tenantId: tenant.id, provider: 'ZELLE', credentials: {}, isEnabled: true },
+        }),
+      );
+
+      const res = await request(app.getHttpServer()).get('/api/v1/tenants/storefront/zelle-bad').expect(200);
+
+      expect(res.body.data.zellePaymentInfo).toBeNull();
+      expect(res.body.data.checkoutMethods).not.toContain('ZELLE');
+    });
+  });
+
   describe('expiry job', () => {
     it('inside the grace period the store keeps the paid channels; after it, Free', async () => {
       const { token, tenant, subscription } = await storeOn('exp', proPlan.id, {

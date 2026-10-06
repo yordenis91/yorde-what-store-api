@@ -71,6 +71,30 @@ export class ProductsService {
     }
   }
 
+  /**
+   * A store that dropped to a smaller plan keeps its catalog but only the first
+   * `maxProducts` products stay live (see PlansService.hideProductsOverLimit).
+   * Creating is already blocked by the total count; this stops the hidden ones
+   * from simply being switched back on, so the plan's limit keeps meaning
+   * something. A store within its limit can never trip it: its live products
+   * are always fewer than its total.
+   */
+  private async assertUnderLiveProductLimit(tenantId: string, productId: string) {
+    await this.prisma.db.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${tenantId}))`;
+
+    const { maxProducts } = await this.plansService.getEntitlements(tenantId);
+    if (maxProducts === -1) return;
+
+    const live = await this.prisma.db.product.count({
+      where: { tenantId, isActive: true, isPublished: true, id: { not: productId } },
+    });
+    if (live >= maxProducts) {
+      throw new ForbiddenException(
+        `Your current plan allows ${maxProducts} live products. Hide or delete another product first, or upgrade the plan.`,
+      );
+    }
+  }
+
   async findAll(tenantId: string, query: ProductQueryDto): Promise<PaginatedResult<any>> {
     const where = {
       tenantId,
@@ -141,9 +165,13 @@ export class ProductsService {
    * nesting).
    */
   async update(tenantId: string, id: string, dto: UpdateProductDto) {
-    await this.findOne(tenantId, id);
+    const existing = await this.findOne(tenantId, id);
     const { categoryIds, taxIds, variants, ...data } = dto;
     const db = this.prisma.db;
+
+    const wasLive = existing.isActive && existing.isPublished;
+    const willBeLive = (data.isActive ?? existing.isActive) && (data.isPublished ?? existing.isPublished);
+    if (willBeLive && !wasLive) await this.assertUnderLiveProductLimit(tenantId, id);
 
     if (categoryIds) {
       await db.productCategoryOnProduct.deleteMany({ where: { productId: id } });

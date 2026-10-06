@@ -41,12 +41,13 @@ function buildService(options: { candidates?: unknown[]; claimCount?: number; fr
   const config = { get: () => 'https://yws.example.com' } as unknown as ConfigService;
   const plansService = {
     findFreePlan: jest.fn().mockResolvedValue(options.freePlan === undefined ? { id: 'plan-free' } : options.freePlan),
+    hideProductsOverLimit: jest.fn().mockResolvedValue(0),
   } as unknown as PlansService;
   const billing = { cancelStripeSubscription: jest.fn() } as unknown as jest.Mocked<BillingService>;
   const emailQueue = { add: jest.fn() } as unknown as jest.Mocked<Queue>;
 
   const service = new SubscriptionLifecycleService(prisma, config, plansService, billing, emailQueue);
-  return { service, updateMany, update, billing, emailQueue };
+  return { service, updateMany, update, billing, emailQueue, plansService };
 }
 
 describe('SubscriptionLifecycleService.run', () => {
@@ -77,7 +78,7 @@ describe('SubscriptionLifecycleService.run', () => {
   });
 
   it('moves a store to Free once grace is over, and stops its card billing', async () => {
-    const { service, update, billing, emailQueue } = buildService({
+    const { service, update, billing, emailQueue, plansService } = buildService({
       candidates: [candidate({ expiresAt: inDays(-8), billingProvider: 'STRIPE', stripeSubscriptionId: 'sub_1' })],
     });
 
@@ -95,6 +96,8 @@ describe('SubscriptionLifecycleService.run', () => {
       },
     });
     expect(emailQueue.add.mock.calls[0][1]).toMatchObject({ templateKey: 'subscription-downgraded' });
+    // The catalog is trimmed to the Free limit once the row is on the Free plan.
+    expect(plansService.hideProductsOverLimit).toHaveBeenCalledWith('tenant-1');
   });
 
   it('leaves the lapsed row in place when no free plan exists (getEntitlements still treats it as Free)', async () => {

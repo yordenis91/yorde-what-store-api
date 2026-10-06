@@ -114,6 +114,10 @@ export class SubscriptionLifecycleService {
         cancelAtPeriodEnd: false,
       },
     });
+    // After the row is updated, so the limit read is the Free plan's.
+    const hidden = await this.plansService.hideProductsOverLimit(subscription.tenantId);
+    if (hidden > 0)
+      this.logger.log(`Unpublished ${hidden} product(s) over the Free limit (tenant ${subscription.tenantId})`);
   }
 
   private async notify(subscription: Candidate, notice: ExpiryNotice) {
