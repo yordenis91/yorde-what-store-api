@@ -124,7 +124,9 @@ async function main() {
     const parent = categoryTree[i];
     let parentRow = await prisma.categoryTemplate.findUnique({ where: { slug: parent.slug } });
     if (!parentRow) {
-      parentRow = await prisma.categoryTemplate.create({ data: { name: parent.name, slug: parent.slug, sortOrder: i } });
+      parentRow = await prisma.categoryTemplate.create({
+        data: { name: parent.name, slug: parent.slug, sortOrder: i },
+      });
       console.log(`Created category template: ${parent.name}`);
     }
     for (let j = 0; j < parent.children.length; j++) {
@@ -156,6 +158,153 @@ async function main() {
         }
       });
     }
+  }
+
+  // A real, browsable storefront for manual QA and screenshots — the
+  // mobile/web clients otherwise have nothing to render against until a
+  // merchant signs up and fills a store in themselves. Skipped entirely if
+  // the slug is already taken (re-running this script is always safe).
+  const demoSlug = process.env.DEMO_STORE_SLUG ?? 'demo';
+  const existingDemo = await prisma.tenant.findUnique({ where: { slug: demoSlug } });
+  if (!existingDemo) {
+    const demoOwnerEmail = process.env.DEMO_OWNER_EMAIL ?? 'demo-owner@yws.dev';
+    const demoOwnerPassword = process.env.DEMO_OWNER_PASSWORD ?? 'DemoOwner123!';
+    let demoOwner = await prisma.user.findUnique({ where: { email: demoOwnerEmail } });
+    if (!demoOwner) {
+      const passwordHash = await bcrypt.hash(demoOwnerPassword, 12);
+      demoOwner = await prisma.user.create({
+        data: { email: demoOwnerEmail, name: 'Demo Owner', passwordHash, globalRole: 'USER' },
+      });
+      console.log(`Created demo store owner: ${demoOwnerEmail} / ${demoOwnerPassword}`);
+    }
+
+    const tenant = await prisma.tenant.create({
+      data: {
+        ownerId: demoOwner.id,
+        name: 'Tienda Demo',
+        slug: demoSlug,
+        tagline: 'Una tienda de ejemplo para probar la app',
+        theme: 'emerald',
+        tracksInventory: true,
+        whatsappEnabled: true,
+        whatsappNumber: '+15551234567',
+        socialLinks: { instagram: 'https://instagram.com/yordewhatstore', whatsapp: 'https://wa.me/15551234567' },
+        members: { create: { userId: demoOwner.id, role: 'OWNER' } },
+      },
+    });
+    console.log(`Created demo tenant: ${tenant.name} (/store/${tenant.slug})`);
+
+    // product_categories/products/product_images/product_category_assignments
+    // are RLS-protected (tenant_isolation policy, see the init migration) —
+    // same bypass as the email_templates block above, since this script runs
+    // as a bare PrismaClient with no ambient app.tenant_id.
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
+
+      const categoryNames = ['Ropa', 'Electrónica', 'Hogar'];
+      const categories: Record<string, string> = {};
+      for (const name of categoryNames) {
+        const category = await tx.productCategory.create({ data: { tenantId: tenant.id, name } });
+        categories[name] = category.id;
+      }
+      console.log(`Created ${categoryNames.length} demo categories`);
+
+      const daysAgo = (n: number) => new Date(Date.now() - n * 24 * 60 * 60 * 1000);
+      const demoProducts = [
+        {
+          name: 'Camiseta Básica',
+          category: 'Ropa',
+          price: 12.99,
+          quantity: 40,
+          hasVariants: false,
+          createdAt: daysAgo(0),
+          image: 'tshirt',
+        },
+        {
+          name: 'Zapatillas Deportivas',
+          category: 'Ropa',
+          price: 45.0,
+          quantity: 15,
+          hasVariants: true,
+          createdAt: daysAgo(20),
+          image: 'sneakers',
+        },
+        {
+          name: 'Mochila Urbana',
+          category: 'Ropa',
+          price: 34.0,
+          quantity: 10,
+          hasVariants: false,
+          createdAt: daysAgo(30),
+          image: 'backpack',
+        },
+        {
+          name: 'Auriculares Bluetooth',
+          category: 'Electrónica',
+          price: 29.99,
+          quantity: 25,
+          hasVariants: false,
+          createdAt: daysAgo(15),
+          image: 'headphones',
+        },
+        {
+          name: 'Cargador USB-C',
+          category: 'Electrónica',
+          price: 9.99,
+          quantity: 0,
+          hasVariants: false,
+          createdAt: daysAgo(40),
+          image: 'charger',
+        },
+        {
+          name: 'Lámpara de Escritorio',
+          category: 'Hogar',
+          price: 19.99,
+          quantity: 12,
+          hasVariants: false,
+          createdAt: daysAgo(10),
+          image: 'lamp',
+        },
+        {
+          name: 'Set de Toallas',
+          category: 'Hogar',
+          price: 15.5,
+          quantity: 30,
+          hasVariants: false,
+          createdAt: daysAgo(1),
+          image: 'towels',
+        },
+        {
+          name: 'Termo Acero Inoxidable',
+          category: 'Hogar',
+          price: 11.25,
+          quantity: 50,
+          hasVariants: false,
+          createdAt: daysAgo(25),
+          image: 'bottle',
+        },
+      ];
+
+      for (const p of demoProducts) {
+        const product = await tx.product.create({
+          data: {
+            tenantId: tenant.id,
+            name: p.name,
+            price: p.price,
+            quantity: p.quantity,
+            hasVariants: p.hasVariants,
+            createdAt: p.createdAt,
+            categories: { create: { tenantId: tenant.id, categoryId: categories[p.category] } },
+            images: {
+              create: { tenantId: tenant.id, url: `https://picsum.photos/seed/${p.image}/600/600`, isCover: true },
+            },
+          },
+        });
+        console.log(`Created demo product: ${product.name}`);
+      }
+    });
+  } else {
+    console.log(`Demo tenant already exists: /store/${demoSlug}`);
   }
 }
 

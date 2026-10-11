@@ -368,6 +368,12 @@ model Tenant {
   itemLineTemplate     String @default("{sku} : {quantity} x {product_name} - {variant_name} + {item_tax} = {item_total}") @map("item_line_template")
 
   socialLinks   Json @default("{}") @map("social_links")
+  /// Storefront trust strip, shown under the header. Keyed by a fixed set
+  /// (shipping/payment/delivery) the clients know how to render — an unknown
+  /// key is ignored, same convention as socialLinks. Defaults to the three
+  /// badges every storefront already showed before this was configurable, so
+  /// existing tenants render identically until they edit it.
+  trustBadges   Json @default("{\"shipping\":{\"enabled\":true,\"text\":\"Envío gratis\"},\"payment\":{\"enabled\":true,\"text\":\"Pago seguro\"},\"delivery\":{\"enabled\":true,\"text\":\"Entrega rápida\"}}") @map("trust_badges")
   settings      Json @default("{}")
   /// Platform-admin-only bag (internal flags, support context) — distinct from
   /// `settings` above, which the store owner reads/writes themselves.
