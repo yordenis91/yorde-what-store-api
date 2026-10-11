@@ -216,7 +216,7 @@ src/
 prisma/
 ├── schema.prisma               Database schema
 ├── migrations/                 Prisma migrations (includes the RLS policies)
-└── seed.ts                     Plans, category templates, SUPER_ADMIN seed
+└── seed.ts                     Plans, category templates, SUPER_ADMIN, demo store seed
 
 test/                           e2e suite (real Postgres — see Testing)
 ```
@@ -241,7 +241,7 @@ cp .env.example .env      # then fill in the secrets — see below
 
 ```bash
 npx prisma migrate deploy   # or `npm run prisma:migrate:dev` while iterating on schema.prisma
-npm run prisma:seed         # subscription plans, category templates, SUPER_ADMIN account
+npm run prisma:seed         # subscription plans, category templates, SUPER_ADMIN account, demo store
 ```
 
 ### Run
@@ -296,6 +296,8 @@ copy it to `.env` and fill in real secrets before running anything beyond
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `MAIL_FROM` | *(empty)* / `587` / ... / `no-reply@example.com` | Unset `SMTP_HOST` means the email processor logs instead of sending — no error. Read once at first boot only, to seed the platform settings row; after that, the admin-editable database row is authoritative. |
 | **Seed** | | |
 | `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_PASSWORD` | — | Used only by `npm run prisma:seed`. |
+| `DEMO_STORE_SLUG` | `demo` | The seeded demo store's slug (`/store/<slug>`) — skipped entirely if a tenant with this slug already exists, so re-running the seed is always safe. |
+| `DEMO_OWNER_EMAIL` / `DEMO_OWNER_PASSWORD` | `demo-owner@yws.dev` / `DemoOwner123!` | Login for the demo store's owner account. |
 | **Backups** | | |
 | `BACKUP_CRON` / `BACKUP_RETENTION_COUNT` | `0 3 * * *` / `14` | |
 | `BACKUP_DATABASE_URL` | — | **Not** the same role as `DATABASE_URL` — needs `BYPASSRLS`, which must never go on the app's own runtime role. See `DEPLOY.md`. |
@@ -320,7 +322,7 @@ copy it to `.env` and fill in real secrets before running anything beyond
 | `prisma:migrate:dev` | Create/apply a migration from `schema.prisma` changes. |
 | `prisma:migrate` | Apply pending migrations (`migrate deploy` — what production runs). |
 | `prisma:studio` | Prisma's DB browser GUI. |
-| `prisma:seed` | Seed plans, category templates, and the SUPER_ADMIN account. |
+| `prisma:seed` | Seed plans, category templates, the SUPER_ADMIN account, and a demo store (`/store/demo`) for manual QA. |
 | `smoke:smtp` | Real-network SMTP smoke test against live credentials (not run in CI). |
 | `load:storefront` | `autocannon`-based load test against a running instance. |
 
