@@ -53,6 +53,7 @@ export class TenantsService {
         currencySymbolPosition: true,
         locale: true,
         socialLinks: true,
+        trustBadges: true,
         whatsappEnabled: true,
         telegramEnabled: true,
         termsOfSaleContent: true,

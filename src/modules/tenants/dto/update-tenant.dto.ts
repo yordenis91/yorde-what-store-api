@@ -127,5 +127,9 @@ export class UpdateTenantDto {
 
   @IsOptional()
   @IsObject()
+  trustBadges?: Record<string, { enabled: boolean; text: string }>;
+
+  @IsOptional()
+  @IsObject()
   settings?: Record<string, unknown>;
 }
