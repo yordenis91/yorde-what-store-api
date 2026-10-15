@@ -65,9 +65,9 @@ export const stripeConfig = registerAs('stripe', () => ({
 }));
 
 /**
- * Platform-level MercadoPago credentials, used only for webhook signature
- * verification and payment lookups. Per-tenant checkout credentials come from
- * TenantPaymentSetting (see tenants.service.ts), mirroring the Stripe adapter.
+ * The platform's MercadoPago account. Every MercadoPago checkout, payment
+ * lookup (webhook) and refund goes through it; stores cannot bring their own
+ * token, since their webhooks could not be verified with this secret.
  */
 export const mercadoPagoConfig = registerAs('mercadoPago', () => ({
   accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN,
