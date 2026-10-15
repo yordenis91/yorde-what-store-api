@@ -71,4 +71,15 @@ describe('validateEnv', () => {
       expect(() => validateEnv({ ...VALID_ENV, PUBLIC_WEB_URL: 'yws.example.com' })).toThrow(/PUBLIC_WEB_URL/);
     });
   });
+
+  describe('TRUST_PROXY', () => {
+    it('accepts a hop count and an unset value', () => {
+      expect(() => validateEnv({ ...VALID_ENV, TRUST_PROXY: '2' })).not.toThrow();
+      expect(() => validateEnv({ ...VALID_ENV })).not.toThrow();
+    });
+
+    it('refuses "true", which would trust any forged X-Forwarded-For', () => {
+      expect(() => validateEnv({ ...VALID_ENV, TRUST_PROXY: 'true' })).toThrow(/TRUST_PROXY/);
+    });
+  });
 });

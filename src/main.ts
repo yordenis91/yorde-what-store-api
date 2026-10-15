@@ -36,6 +36,8 @@ async function bootstrap() {
   const prefix = config.get<string>('app.prefix') ?? 'api/v1';
   const corsOrigins = config.get<string[]>('app.corsOrigins') ?? [];
 
+  // Before any middleware or guard reads req.ip (the throttler does).
+  app.set('trust proxy', config.get('app.trustProxy') ?? false);
   app.setGlobalPrefix(prefix);
   app.use(helmet());
   // Every tenant-scoped GET (storefront and admin alike) resolves its tenant

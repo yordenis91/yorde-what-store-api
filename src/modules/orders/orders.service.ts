@@ -192,7 +192,13 @@ export class OrdersService {
    * the same way. Refuses once the order is already marked PAID so a
    * confirmed payment's evidence can't be swapped out from under it.
    */
-  async submitPaymentProof(tenantId: string, orderId: string, dto: PaymentProofDto) {
+  /**
+   * The checks submitPaymentProof makes, callable on their own so an endpoint
+   * that receives a file can refuse before writing it to disk — the upload
+   * route is public, and saving first meant anyone could fill the disk with
+   * images for orders that don't exist.
+   */
+  async assertAcceptsPaymentProof(tenantId: string, orderId: string) {
     const order = await this.prisma.db.order.findFirst({ where: { id: orderId, tenantId } });
     if (!order) throw new NotFoundException('Order not found');
     if (order.fulfillmentMethod !== 'ZELLE') {
@@ -201,6 +207,10 @@ export class OrdersService {
     if (order.paymentStatus === 'PAID') {
       throw new ConflictException('This order has already been paid');
     }
+  }
+
+  async submitPaymentProof(tenantId: string, orderId: string, dto: PaymentProofDto) {
+    await this.assertAcceptsPaymentProof(tenantId, orderId);
 
     const updated = await this.prisma.db.order.update({
       where: { id: orderId },

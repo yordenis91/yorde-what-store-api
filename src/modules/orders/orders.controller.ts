@@ -1,3 +1,4 @@
+import { Throttle } from '@nestjs/throttler';
 import {
   BadRequestException,
   Body,
@@ -28,6 +29,7 @@ import { OptionalCustomerAuthGuard } from '../customers/guards/optional-customer
 import { Audit } from '../audit/decorators/audit.decorator';
 import { AuditInterceptor } from '../audit/interceptors/audit.interceptor';
 import { ALLOWED_MIME_TYPES, MAX_UPLOAD_SIZE_BYTES, saveUploadedImage } from '../uploads/uploads.controller';
+import { deleteUploadedFile } from '../uploads/uploads.util';
 import { OrdersService } from './orders.service';
 import {
   CreateOrderDto,
@@ -38,6 +40,9 @@ import {
   QuoteOrderDto,
   UpdateOrderDto,
 } from './dto';
+
+/** The route is public and each call can write an image: far tighter than the global default. */
+const PROOF_UPLOAD_THROTTLE = { default: { limit: 10, ttl: 60_000 } };
 
 @ApiTags('storefront-orders')
 @Public()
@@ -86,6 +91,7 @@ export class StorefrontOrdersController {
    * which re-validates the order itself (tenant, ZELLE, not already paid).
    */
   @Post(':id/payment-proof-image')
+  @Throttle(PROOF_UPLOAD_THROTTLE)
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -105,8 +111,16 @@ export class StorefrontOrdersController {
     @UploadedFile() file: Express.Multer.File,
     @Body() dto: PaymentProofImageDto,
   ) {
+    // Public route: refuse before anything is written to disk.
+    await this.ordersService.assertAcceptsPaymentProof(tenantId, id);
     const { url } = await saveUploadedImage(tenantId, file);
-    return this.ordersService.submitPaymentProof(tenantId, id, { proofUrl: url, reference: dto.reference });
+    try {
+      return await this.ordersService.submitPaymentProof(tenantId, id, { proofUrl: url, reference: dto.reference });
+    } catch (err) {
+      // Lost a race with a payment confirmation: don't leave the file orphaned.
+      await deleteUploadedFile(url);
+      throw err;
+    }
   }
 }
 

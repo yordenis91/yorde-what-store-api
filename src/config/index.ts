@@ -1,5 +1,6 @@
 import { registerAs } from '@nestjs/config';
 import { resolvePublicWebUrl } from '../common/utils/public-links';
+import { parseTrustProxy } from '../common/utils/trust-proxy';
 
 export const appConfig = registerAs('app', () => {
   const corsOrigins = (process.env.CORS_ORIGINS ?? '')
@@ -10,6 +11,8 @@ export const appConfig = registerAs('app', () => {
     port: parseInt(process.env.PORT ?? '3000', 10),
     prefix: process.env.API_PREFIX ?? 'api/v1',
     corsOrigins,
+    /** Express `trust proxy` — see common/utils/trust-proxy.ts. */
+    trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
     /** Base for every link the api emails — see common/utils/public-links.ts. */
     publicWebUrl: resolvePublicWebUrl(process.env.PUBLIC_WEB_URL, corsOrigins),
     env: process.env.NODE_ENV ?? 'development',
