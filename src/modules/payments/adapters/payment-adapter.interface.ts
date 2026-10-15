@@ -6,6 +6,9 @@ export interface CheckoutOrderContext {
   tenantId: string;
   currency: string;
   grandTotal: number;
+  shippingTotal: number;
+  taxTotal: number;
+  discountTotal: number;
   customerEmail?: string | null;
   items: { productName: string; variantName?: string | null; unitPrice: number; quantity: number }[];
 }

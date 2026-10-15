@@ -1,3 +1,4 @@
+import { assertSafeImageUrl } from '../uploads/upload-url.util';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -205,6 +206,7 @@ export class ProductsService {
   }
 
   async addImage(tenantId: string, productId: string, dto: AddProductImageDto) {
+    assertSafeImageUrl(tenantId, dto.url);
     await this.findOne(tenantId, productId);
     if (dto.isCover) {
       await this.prisma.db.productImage.updateMany({ where: { productId }, data: { isCover: false } });
@@ -226,7 +228,7 @@ export class ProductsService {
     const image = await this.prisma.db.productImage.findFirst({ where: { id: imageId, productId } });
     if (!image) throw new NotFoundException('Image not found');
     await this.prisma.db.productImage.delete({ where: { id: imageId } });
-    await deleteUploadedFile(image.url);
+    await deleteUploadedFile(image.url, tenantId);
     return { deleted: true };
   }
 

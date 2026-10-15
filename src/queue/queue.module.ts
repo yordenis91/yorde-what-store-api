@@ -1,11 +1,13 @@
-import { Module } from '@nestjs/common';
-import { BullModule } from '@nestjs/bullmq';
+import { Module, OnModuleInit } from '@nestjs/common';
+import { BullModule, InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import {
   BACKUP_QUEUE,
   EMAIL_QUEUE,
   INVENTORY_SYNC_QUEUE,
   INVOICE_PDF_QUEUE,
   ORDER_NOTIFICATION_QUEUE,
+  STALE_ORDERS_QUEUE,
   SUBSCRIPTION_LIFECYCLE_QUEUE,
   VISITS_CLEANUP_QUEUE,
 } from './queue.constants';
@@ -15,6 +17,7 @@ import { InventorySyncProcessor } from './processors/inventory-sync.processor';
 import { OrderNotificationProcessor } from './processors/order-notification.processor';
 import { VisitsCleanupProcessor } from './processors/visits-cleanup.processor';
 import { BackupProcessor } from './processors/backup.processor';
+import { StaleOrdersProcessor } from './processors/stale-orders.processor';
 import { SubscriptionLifecycleProcessor } from './processors/subscription-lifecycle.processor';
 import { EmailTemplatesModule } from '../modules/email-templates/email-templates.module';
 import { TenantsModule } from '../modules/tenants/tenants.module';
@@ -39,6 +42,7 @@ import { BillingModule } from '../modules/billing/billing.module';
       { name: VISITS_CLEANUP_QUEUE },
       { name: BACKUP_QUEUE },
       { name: SUBSCRIPTION_LIFECYCLE_QUEUE },
+      { name: STALE_ORDERS_QUEUE },
     ),
   ],
   providers: [
@@ -49,6 +53,14 @@ import { BillingModule } from '../modules/billing/billing.module';
     VisitsCleanupProcessor,
     BackupProcessor,
     SubscriptionLifecycleProcessor,
+    StaleOrdersProcessor,
   ],
 })
-export class QueueModule {}
+export class QueueModule implements OnModuleInit {
+  constructor(@InjectQueue(STALE_ORDERS_QUEUE) private readonly staleOrdersQueue: Queue) {}
+
+  /** Keyed by jobId, so re-running on every boot updates the schedule instead of duplicating it. */
+  async onModuleInit() {
+    await this.staleOrdersQueue.add('sweep', {}, { repeat: { pattern: '*/15 * * * *' }, jobId: 'stale-orders-sweep' });
+  }
+}

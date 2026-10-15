@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 
 /**
  * Kept out of `uploads/` on purpose: that directory is registered with
@@ -22,5 +22,9 @@ export function getInvoicePath(tenantId: string, orderId: string): string {
  */
 export function resolveLocalUploadPath(url: string | null | undefined): string | null {
   if (!url || !url.startsWith('/uploads/')) return null;
-  return join(process.cwd(), url);
+  const root = join(process.cwd(), 'uploads');
+  const path = join(process.cwd(), url);
+  const rel = relative(root, path);
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return null;
+  return path;
 }

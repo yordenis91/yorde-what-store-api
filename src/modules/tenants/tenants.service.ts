@@ -1,3 +1,4 @@
+import { assertSafeImageUrl } from '../uploads/upload-url.util';
 import {
   BadRequestException,
   ConflictException,
@@ -12,7 +13,8 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { FALLBACK_ENTITLEMENTS, PlansService } from '../plans/plans.service';
 import { isLapsed } from '../plans/subscription-lifecycle.util';
 import { decryptSecret, encryptSecret } from '../../common/utils/crypto.util';
-import { maskSmtpPassword } from '../../common/utils/mask-tenant-secrets.util';
+import { assertSafeSmtpSettings } from '../../common/utils/smtp-guard.util';
+import { toTenantSettingsView } from '../../common/utils/mask-tenant-secrets.util';
 import { deleteUploadedFile } from '../uploads/uploads.util';
 import { CreateTenantDto, UpdateTenantDto, UpsertPaymentSettingDto } from './dto';
 
@@ -33,13 +35,13 @@ export class TenantsService {
       where: { userId, isActive: true },
       include: { tenant: true },
     });
-    return memberships.map((m) => ({ ...maskSmtpPassword(m.tenant), myRole: m.role }));
+    return memberships.map((m) => ({ ...toTenantSettingsView(m.tenant), myRole: m.role }));
   }
 
   async findCurrent(tenantId: string) {
     const tenant = await this.prisma.db.tenant.findUnique({ where: { id: tenantId } });
     if (!tenant) throw new NotFoundException('Tenant not found');
-    return maskSmtpPassword(tenant);
+    return toTenantSettingsView(tenant);
   }
 
   async findPublicBySlug(slug: string) {
@@ -149,7 +151,9 @@ export class TenantsService {
   }
 
   async update(tenantId: string, dto: UpdateTenantDto) {
-    const { smtpPassword, ...rest } = dto;
+    const { smtpPassword, telegramBotToken, ...rest } = dto;
+    assertSafeSmtpSettings(dto.smtpHost, dto.smtpPort);
+    for (const field of IMAGE_FIELDS) assertSafeImageUrl(tenantId, dto[field], field);
     const data: Record<string, unknown> = { ...rest };
     // Omitted entirely: leave the stored password untouched (so the merchant
     // isn't forced to retype it on every settings save). An explicit empty
@@ -157,6 +161,10 @@ export class TenantsService {
     if (smtpPassword !== undefined) {
       const secret = this.config.get<string>('security.encryptionKey')!;
       data.smtpPassword = smtpPassword === '' ? null : encryptSecret(smtpPassword, secret);
+    }
+    if (telegramBotToken !== undefined) {
+      const secret = this.config.get<string>('security.encryptionKey')!;
+      data.telegramBotToken = telegramBotToken === '' ? null : encryptSecret(telegramBotToken, secret);
     }
     const previous = await this.prisma.db.tenant.findUnique({
       where: { id: tenantId },
@@ -177,11 +185,11 @@ export class TenantsService {
     // forever unless we clean it up here — nothing else ever will.
     for (const field of IMAGE_FIELDS) {
       if (dto[field] !== undefined && previous?.[field] && previous[field] !== dto[field]) {
-        await deleteUploadedFile(previous[field]);
+        await deleteUploadedFile(previous[field], tenantId);
       }
     }
 
-    return maskSmtpPassword(tenant);
+    return toTenantSettingsView(tenant);
   }
 
   /** Internal use only (email queue) — the decrypted password never leaves this method. */

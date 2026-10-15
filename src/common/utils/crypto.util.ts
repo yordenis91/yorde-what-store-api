@@ -2,8 +2,17 @@ import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:
 
 const ALGORITHM = 'aes-256-gcm';
 
+// scryptSync is deliberately slow and blocks the event loop; the key only
+// depends on the (process-lifetime) secret, so derive it once.
+const keyCache = new Map<string, Buffer>();
+
 function deriveKey(secret: string): Buffer {
-  return scryptSync(secret, 'yws-static-salt', 32);
+  let key = keyCache.get(secret);
+  if (!key) {
+    key = scryptSync(secret, 'yws-static-salt', 32);
+    keyCache.set(secret, key);
+  }
+  return key;
 }
 
 /** Encrypts arbitrary secrets (payment gateway credentials, bot tokens) at rest. */
@@ -25,4 +34,13 @@ export function decryptSecret(payload: string, secret: string): string {
   const decipher = createDecipheriv(ALGORITHM, key, iv);
   decipher.setAuthTag(authTag);
   return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+}
+
+/** For columns that held plaintext before they were encrypted: falls back to the stored value when it isn't a valid payload. */
+export function decryptSecretOrPlain(payload: string, secret: string): string {
+  try {
+    return decryptSecret(payload, secret);
+  } catch {
+    return payload;
+  }
 }

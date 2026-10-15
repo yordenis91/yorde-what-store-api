@@ -25,8 +25,28 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   async onModuleInit() {
     await this.$connect();
+    await this.assertRestrictedDatabaseRole();
     (this as any).$on('warn', (e: any) => this.logger.warn(e.message));
     (this as any).$on('error', (e: any) => this.logger.error(e.message));
+  }
+
+  /**
+   * Row-level security is the tenant boundary. A superuser or BYPASSRLS role
+   * ignores every policy (FORCE ROW LEVEL SECURITY included), silently turning
+   * the whole boundary off — typical when a managed Postgres hands out its
+   * admin user. Refuse to serve production traffic that way unless the
+   * operator explicitly opts out.
+   */
+  private async assertRestrictedDatabaseRole() {
+    const rows = await this.$queryRaw<{ rolsuper: boolean; rolbypassrls: boolean; rolname: string }[]>`
+      SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`;
+    const role = rows[0];
+    if (!role || (!role.rolsuper && !role.rolbypassrls)) return;
+    const message = `Database role "${role.rolname}" is ${role.rolsuper ? 'a SUPERUSER' : 'BYPASSRLS'}: row-level security (tenant isolation) is NOT enforced. Use a plain role for DATABASE_URL.`;
+    if (process.env.NODE_ENV === 'production' && process.env.ALLOW_PRIVILEGED_DB_ROLE !== 'true') {
+      throw new Error(message);
+    }
+    this.logger.error(message);
   }
 
   async onModuleDestroy() {

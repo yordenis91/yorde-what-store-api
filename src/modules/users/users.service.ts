@@ -89,6 +89,17 @@ export class UsersService {
     if (member.role === 'OWNER') throw new ConflictException('Cannot remove the store owner');
 
     await this.prisma.tenantMember.update({ where: { id: memberId }, data: { isActive: false } });
+    // Access/refresh tokens already fail the live membership check; also stop
+    // this tenant's push notifications and mobile sessions from lingering.
+    const now = new Date();
+    await this.prisma.deviceToken.updateMany({
+      where: { userId: member.userId, tenantId, revokedAt: null },
+      data: { revokedAt: now },
+    });
+    await this.prisma.mobileRefreshToken.updateMany({
+      where: { userId: member.userId, tenantId, revokedAt: null },
+      data: { revokedAt: now },
+    });
     return { removed: true };
   }
 

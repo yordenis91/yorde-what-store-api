@@ -39,6 +39,7 @@ export class CouponsController {
   constructor(private readonly couponsService: CouponsService) {}
 
   @Audit({ action: 'coupon.create', entityType: 'Coupon' })
+  @Roles('OWNER')
   @Post()
   create(@CurrentTenantId() tenantId: string, @Body() dto: CreateCouponDto) {
     return this.couponsService.create(tenantId, dto);
@@ -55,12 +56,14 @@ export class CouponsController {
   }
 
   @Audit({ action: 'coupon.update', entityType: 'Coupon' })
+  @Roles('OWNER')
   @Patch(':id')
   update(@CurrentTenantId() tenantId: string, @Param('id') id: string, @Body() dto: UpdateCouponDto) {
     return this.couponsService.update(tenantId, id, dto);
   }
 
   @Audit({ action: 'coupon.delete', entityType: 'Coupon' })
+  @Roles('OWNER')
   @Delete(':id')
   remove(@CurrentTenantId() tenantId: string, @Param('id') id: string) {
     return this.couponsService.remove(tenantId, id);

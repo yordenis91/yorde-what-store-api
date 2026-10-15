@@ -123,6 +123,9 @@ export class AuthController {
     @Body() dto: SwitchTenantDto,
     @Res({ passthrough: true }) res: Response,
   ) {
+    // An impersonation token is deliberately short-lived and non-refreshable;
+    // trading it here for a normal 30-day session would defeat that.
+    if (user.impersonatedBy) throw new UnauthorizedException('Not allowed while impersonating');
     const { refreshToken, ...rest } = await this.authService.switchTenant(user.id, dto.tenantId, dto.deviceId);
     this.setRefreshCookie(res, refreshToken);
     return rest;
@@ -130,17 +133,20 @@ export class AuthController {
 
   @Post('2fa/setup')
   async setupTwoFactor(@CurrentUser() user: AuthenticatedUser) {
+    if (user.impersonatedBy) throw new UnauthorizedException('Not allowed while impersonating');
     return this.authService.setupTwoFactor(user.id);
   }
 
   @Post('2fa/enable')
   async enableTwoFactor(@CurrentUser() user: AuthenticatedUser, @Body() dto: EnableTwoFactorDto) {
+    if (user.impersonatedBy) throw new UnauthorizedException('Not allowed while impersonating');
     return this.authService.enableTwoFactor(user.id, dto);
   }
 
   @Post('2fa/disable')
-  async disableTwoFactor(@CurrentUser() user: AuthenticatedUser) {
-    return this.authService.disableTwoFactor(user.id);
+  async disableTwoFactor(@CurrentUser() user: AuthenticatedUser, @Body() dto: EnableTwoFactorDto) {
+    if (user.impersonatedBy) throw new UnauthorizedException('Not allowed while impersonating');
+    return this.authService.disableTwoFactor(user.id, dto.code);
   }
 
   private setRefreshCookie(res: Response, token: string) {

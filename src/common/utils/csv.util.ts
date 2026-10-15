@@ -5,7 +5,11 @@
  */
 function escapeCsvField(value: unknown): string {
   if (value === null || value === undefined) return '';
-  const str = String(value);
+  let str = String(value);
+  // Spreadsheet formula injection: Excel/Sheets run a cell that starts with one
+  // of these. Customer-supplied text (names, notes) ends up in exports, so
+  // neutralise with a leading apostrophe — but leave plain numbers (-5, +1.50) alone.
+  if (typeof value === 'string' && /^[=+\-@\t\r]/.test(str) && !/^[+-]?\d+(\.\d+)?$/.test(str)) str = `'${str}`;
   if (/[",\n\r]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
   return str;
 }

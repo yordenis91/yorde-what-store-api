@@ -27,6 +27,7 @@ export class AdminCustomersController {
 
   /** Support-assisted "delete my data" — for a customer who contacted the Merchant directly instead of using self-service. */
   @Audit({ action: 'customer.anonymize', entityType: 'Customer' })
+  @Roles('OWNER')
   @Post(':id/anonymize')
   anonymize(@CurrentTenantId() tenantId: string, @Param('id') id: string) {
     return this.customersService.anonymize(tenantId, id);

@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
+import { ConfigService } from '@nestjs/config';
 import { Queue } from 'bullmq';
 import Stripe from 'stripe';
 import { Order } from '@prisma/client';
@@ -8,6 +9,7 @@ import { TenantsService } from '../tenants/tenants.service';
 import { StripeAdapter } from './adapters/stripe.adapter';
 import { MercadoPagoAdapter } from './adapters/mercadopago.adapter';
 import { INVOICE_PDF_QUEUE } from '../../queue/queue.constants';
+import { toMinorUnits } from './currency.util';
 import { PLAN_CHECKOUT_KIND } from '../billing/billing.constants';
 
 /**
@@ -30,7 +32,64 @@ export class PaymentsService {
     private readonly stripeAdapter: StripeAdapter,
     private readonly mercadoPagoAdapter: MercadoPagoAdapter,
     @InjectQueue(INVOICE_PDF_QUEUE) private readonly invoiceQueue: Queue,
+    private readonly config: ConfigService,
   ) {}
+
+  /** A checkout can only be opened for an order that still owes money. */
+  private assertPayable(order: Order) {
+    if (order.paymentStatus === 'PAID') throw new ConflictException('Order is already paid');
+    if (TERMINAL_ORDER_STATUSES.includes(order.status)) {
+      throw new ConflictException(`Order is ${order.status}`);
+    }
+  }
+
+  /**
+   * The provider sends the customer back to these URLs, so they must belong to
+   * this deployment or this store — otherwise a checkout link can be minted
+   * that returns the payer to an attacker's page.
+   */
+  private async assertRedirectUrlsAllowed(tenantId: string, urls: { successUrl: string; cancelUrl: string }) {
+    const corsOrigins = this.config.get<string[]>('app.corsOrigins') ?? [];
+    const tenant = await this.prisma.db.tenant.findUniqueOrThrow({
+      where: { id: tenantId },
+      select: { subdomain: true, customDomain: true },
+    });
+    const allowed = (raw: string) => {
+      let url: URL;
+      try {
+        url = new URL(raw);
+      } catch {
+        return false;
+      }
+      if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
+      if (corsOrigins.includes(url.origin)) return true;
+      if (tenant.customDomain && url.hostname === tenant.customDomain) return true;
+      return Boolean(tenant.subdomain) && url.hostname.startsWith(`${tenant.subdomain}.`);
+    };
+    if (!allowed(urls.successUrl) || !allowed(urls.cancelUrl)) {
+      throw new BadRequestException('Redirect URL is not allowed for this store');
+    }
+  }
+
+  private checkoutContext(tenantId: string, order: Order & { items: any[] }) {
+    return {
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      tenantId,
+      currency: order.currency,
+      grandTotal: Number(order.grandTotal),
+      shippingTotal: Number(order.shippingTotal),
+      taxTotal: Number(order.taxTotal),
+      discountTotal: Number(order.discountTotal),
+      customerEmail: order.customerEmail,
+      items: order.items.map((i) => ({
+        productName: i.productName,
+        variantName: i.variantName,
+        unitPrice: Number(i.unitPrice),
+        quantity: i.quantity,
+      })),
+    };
+  }
 
   async createStripeCheckout(tenantId: string, orderId: string, urls: { successUrl: string; cancelUrl: string }) {
     const order = await this.prisma.db.order.findFirst({
@@ -42,23 +101,13 @@ export class PaymentsService {
       throw new BadRequestException('Order is not configured for card payment');
     }
 
+    this.assertPayable(order);
+    await this.assertRedirectUrlsAllowed(tenantId, urls);
+
     const credentials = await this.tenantsService.getDecryptedCredentials(tenantId, 'STRIPE');
 
     const result = await this.stripeAdapter.createCheckout(
-      {
-        orderId: order.id,
-        orderNumber: order.orderNumber,
-        tenantId,
-        currency: order.currency,
-        grandTotal: Number(order.grandTotal),
-        customerEmail: order.customerEmail,
-        items: order.items.map((i) => ({
-          productName: i.productName,
-          variantName: i.variantName,
-          unitPrice: Number(i.unitPrice),
-          quantity: i.quantity,
-        })),
-      },
+      this.checkoutContext(tenantId, order),
       credentials,
       urls,
     );
@@ -91,25 +140,47 @@ export class PaymentsService {
         return { received: true };
       }
 
-      await this.prisma.withTenant(tenantId, async (tx) => {
+      const paymentIntentId = (session.payment_intent as string) ?? undefined;
+      const refundNeeded = await this.prisma.withTenant(tenantId, async (tx) => {
         const existing = await tx.order.findUnique({ where: { id: orderId } });
-        if (!existing || TERMINAL_ORDER_STATUSES.includes(existing.status)) {
-          this.logger.warn(
-            `Stripe checkout.session.completed for order ${orderId} ignored — order is ${existing?.status ?? 'missing'}`,
+        if (!existing) {
+          this.logger.warn(`Stripe checkout.session.completed for unknown order ${orderId} ignored`);
+          return false;
+        }
+        // Redelivery of an event already applied.
+        if (existing.paymentStatus === 'PAID') return false;
+        if (session.payment_status !== 'paid') return false;
+        if (TERMINAL_ORDER_STATUSES.includes(existing.status)) {
+          this.logger.error(
+            `Stripe session ${session.id} paid for order ${orderId} but the order is ${existing.status}`,
           );
-          return;
+          // Money was taken for an order that can no longer be fulfilled.
+          return existing.status === 'CANCELLED';
+        }
+        if (
+          session.amount_total !== toMinorUnits(Number(existing.grandTotal), existing.currency) ||
+          session.currency?.toUpperCase() !== existing.currency.toUpperCase()
+        ) {
+          this.logger.error(
+            `Stripe session ${session.id} amount ${session.amount_total} ${session.currency} does not match order ${orderId} total ${existing.grandTotal} ${existing.currency}; not marking PAID`,
+          );
+          return false;
         }
 
         const order = await tx.order.update({
           where: { id: orderId },
-          data: {
-            paymentStatus: 'PAID',
-            status: 'CONFIRMED',
-            stripePaymentIntentId: (session.payment_intent as string) ?? undefined,
-          },
+          data: { paymentStatus: 'PAID', status: 'CONFIRMED', stripePaymentIntentId: paymentIntentId },
         });
         await this.invoiceQueue.add('generate-invoice', { tenantId, orderId: order.id });
+        return false;
       });
+      if (refundNeeded && paymentIntentId) {
+        try {
+          await this.refundPaymentIntent(tenantId, paymentIntentId);
+        } catch {
+          this.logger.error(`Automatic refund of ${paymentIntentId} for cancelled order ${orderId} failed; refund manually`);
+        }
+      }
     }
 
     return { received: true };
@@ -137,23 +208,13 @@ export class PaymentsService {
       throw new BadRequestException('Order is not configured for card payment');
     }
 
+    this.assertPayable(order);
+    await this.assertRedirectUrlsAllowed(tenantId, urls);
+
     const credentials = await this.tenantsService.getDecryptedCredentials(tenantId, 'MERCADOPAGO');
 
     const result = await this.mercadoPagoAdapter.createCheckout(
-      {
-        orderId: order.id,
-        orderNumber: order.orderNumber,
-        tenantId,
-        currency: order.currency,
-        grandTotal: Number(order.grandTotal),
-        customerEmail: order.customerEmail,
-        items: order.items.map((i) => ({
-          productName: i.productName,
-          variantName: i.variantName,
-          unitPrice: Number(i.unitPrice),
-          quantity: i.quantity,
-        })),
-      },
+      this.checkoutContext(tenantId, order),
       credentials,
       urls,
     );
@@ -198,13 +259,26 @@ export class PaymentsService {
     }
 
     if (payment.status === 'approved') {
-      await this.prisma.withTenant(tenantId, async (tx) => {
+      const refundNeeded = await this.prisma.withTenant(tenantId, async (tx) => {
         const existing = await tx.order.findUnique({ where: { id: orderId } });
-        if (!existing || TERMINAL_ORDER_STATUSES.includes(existing.status)) {
-          this.logger.warn(
-            `MercadoPago payment ${dataId} approval for order ${orderId} ignored — order is ${existing?.status ?? 'missing'}`,
+        if (!existing) {
+          this.logger.warn(`MercadoPago payment ${dataId} approval for unknown order ${orderId} ignored`);
+          return false;
+        }
+        // payment.updated/created redeliveries must not re-confirm or re-invoice.
+        if (existing.paymentStatus === 'PAID') return false;
+        if (TERMINAL_ORDER_STATUSES.includes(existing.status)) {
+          this.logger.error(`MercadoPago payment ${dataId} approved for order ${orderId} but the order is ${existing.status}`);
+          return existing.status === 'CANCELLED';
+        }
+        if (
+          Math.round(Number(payment.transaction_amount) * 100) !== Math.round(Number(existing.grandTotal) * 100) ||
+          payment.currency_id?.toUpperCase() !== existing.currency.toUpperCase()
+        ) {
+          this.logger.error(
+            `MercadoPago payment ${dataId} amount ${payment.transaction_amount} ${payment.currency_id} does not match order ${orderId} total ${existing.grandTotal} ${existing.currency}; not marking PAID`,
           );
-          return;
+          return false;
         }
 
         const order = await tx.order.update({
@@ -212,7 +286,16 @@ export class PaymentsService {
           data: { paymentStatus: 'PAID', status: 'CONFIRMED', mercadoPagoPaymentId: String(payment.id) },
         });
         await this.invoiceQueue.add('generate-invoice', { tenantId, orderId: order.id });
+        return false;
       });
+      if (refundNeeded) {
+        const credentials = await this.tenantsService.getDecryptedCredentials(tenantId, 'MERCADOPAGO');
+        try {
+          await this.mercadoPagoAdapter.refund(String(payment.id), credentials);
+        } catch {
+          this.logger.error(`Automatic refund of MercadoPago payment ${dataId} for cancelled order ${orderId} failed; refund manually`);
+        }
+      }
     }
 
     return { received: true };

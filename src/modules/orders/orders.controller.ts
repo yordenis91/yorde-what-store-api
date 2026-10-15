@@ -4,6 +4,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   MessageEvent,
   Param,
@@ -22,7 +23,7 @@ import { ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { memoryStorage } from 'multer';
 import { Observable, map } from 'rxjs';
-import { CurrentTenantId, Public, Roles } from '../../common/decorators';
+import { AuthenticatedUser, CurrentTenantId, CurrentUser, Public, Roles } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
 import { CurrentCustomerId } from '../customers/decorators/current-customer-id.decorator';
 import { OptionalCustomerAuthGuard } from '../customers/guards/optional-customer-auth.guard';
@@ -42,6 +43,9 @@ import {
 } from './dto';
 
 /** The route is public and each call can write an image: far tighter than the global default. */
+/** Order creation takes stock and may send email to a customer-supplied address — public, so tighter than the global default. */
+const ORDER_CREATE_THROTTLE = { default: { limit: 20, ttl: 60_000 } };
+
 const PROOF_UPLOAD_THROTTLE = { default: { limit: 10, ttl: 60_000 } };
 
 @ApiTags('storefront-orders')
@@ -52,6 +56,7 @@ export class StorefrontOrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   /** `customerId` comes only from a verified token (OptionalCustomerAuthGuard) — never client-supplied, so it can't be spoofed onto someone else's account. Absent for guest checkout. */
+  @Throttle(ORDER_CREATE_THROTTLE)
   @Post()
   create(@CurrentTenantId() tenantId: string, @Body() dto: CreateOrderDto, @CurrentCustomerId() customerId?: string) {
     return this.ordersService.create(tenantId, dto, customerId);
@@ -118,7 +123,7 @@ export class StorefrontOrdersController {
       return await this.ordersService.submitPaymentProof(tenantId, id, { proofUrl: url, reference: dto.reference });
     } catch (err) {
       // Lost a race with a payment confirmation: don't leave the file orphaned.
-      await deleteUploadedFile(url);
+      await deleteUploadedFile(url, tenantId);
       throw err;
     }
   }
@@ -142,6 +147,7 @@ export class OrdersController {
    * data }` envelope — a CSV download needs the raw file body, not JSON.
    * Registered before `:id` for the same reason as the invoice route below.
    */
+  @Roles('OWNER')
   @Get('export')
   async exportCsv(@CurrentTenantId() tenantId: string, @Query() query: OrderQueryDto, @Res() res: Response) {
     const csv = await this.ordersService.exportCsv(tenantId, query);
@@ -181,7 +187,16 @@ export class OrdersController {
 
   @Audit({ action: 'order.status_update', entityType: 'Order' })
   @Patch(':id/status')
-  updateStatus(@CurrentTenantId() tenantId: string, @Param('id') id: string, @Body() dto: UpdateOrderStatusDto) {
+  updateStatus(
+    @CurrentTenantId() tenantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateOrderStatusDto,
+  ) {
+    // A refund moves real money through the owner's gateway credentials.
+    if (dto.status === 'REFUNDED' && user.tenantRole !== 'OWNER' && user.globalRole !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Only the store owner can refund an order');
+    }
     return this.ordersService.updateStatus(tenantId, id, dto.status);
   }
 

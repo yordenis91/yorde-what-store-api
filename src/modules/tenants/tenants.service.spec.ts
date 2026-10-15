@@ -91,7 +91,7 @@ describe('TenantsService.update — stale image cleanup', () => {
 
     await service.update(TENANT_ID, { logoUrl: '/uploads/tenant-1/new-logo.webp' });
 
-    expect(deleteUploadedFile).toHaveBeenCalledWith('/uploads/tenant-1/old-logo.webp');
+    expect(deleteUploadedFile).toHaveBeenCalledWith('/uploads/tenant-1/old-logo.webp', 'tenant-1');
     expect(deleteUploadedFile).toHaveBeenCalledTimes(1);
   });
 
@@ -104,7 +104,7 @@ describe('TenantsService.update — stale image cleanup', () => {
     expect(deleteUploadedFile).not.toHaveBeenCalled();
 
     await service.update(TENANT_ID, { bannerUrl: null as unknown as string });
-    expect(deleteUploadedFile).toHaveBeenCalledWith('/uploads/tenant-1/old-banner.webp');
+    expect(deleteUploadedFile).toHaveBeenCalledWith('/uploads/tenant-1/old-banner.webp', 'tenant-1');
   });
 
   it('does not touch disk when the field is left out of the update entirely', async () => {

@@ -229,19 +229,33 @@ export class AuthService {
     }
 
     await this.client.mobileRefreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } });
+    let tenantRole = stored.tenantRole ?? undefined;
+    if (stored.tenantId) {
+      const membership = await this.client.tenantMember.findFirst({
+        where: { userId: stored.userId, tenantId: stored.tenantId, isActive: true },
+      });
+      if (!membership) {
+        await this.client.mobileRefreshToken.updateMany({
+          where: { familyId: stored.familyId, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+        return { ok: false };
+      }
+      tenantRole = membership.role;
+    }
     const refreshToken = await this.createMobileRefreshToken(
       stored.userId,
       stored.deviceId,
       stored.familyId,
       stored.tenantId ?? undefined,
-      stored.tenantRole ?? undefined,
+      tenantRole,
     );
     const accessToken = this.signAccessToken(
       user.id,
       user.email,
       user.globalRole,
       stored.tenantId ?? undefined,
-      stored.tenantRole ?? undefined,
+      tenantRole,
     );
     return { ok: true, accessToken, refreshToken };
   }
@@ -269,7 +283,16 @@ export class AuthService {
     try {
       await this.client.refreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } });
       const user = await this.client.user.findUniqueOrThrow({ where: { id: payload.sub } });
-      return await this.issueTokenPair(user.id, user.email, user.globalRole, payload.tenantId, payload.tenantRole);
+      if (!user.isActive) throw new UnauthorizedException('Refresh token no longer valid');
+      let tenantRole = payload.tenantRole;
+      if (payload.tenantId) {
+        const membership = await this.client.tenantMember.findFirst({
+          where: { userId: user.id, tenantId: payload.tenantId, isActive: true },
+        });
+        if (!membership) throw new UnauthorizedException('Refresh token no longer valid');
+        tenantRole = membership.role;
+      }
+      return await this.issueTokenPair(user.id, user.email, user.globalRole, payload.tenantId, tenantRole);
     } catch (err) {
       if (err instanceof UnauthorizedException) throw err;
       throw new UnauthorizedException('Refresh token no longer valid');
@@ -294,6 +317,8 @@ export class AuthService {
 
   async setupTwoFactor(userId: string) {
     const user = await this.client.user.findUniqueOrThrow({ where: { id: userId } });
+    // Re-running setup while 2FA is on would swap the secret and lock the real owner out.
+    if (user.twoFactorEnabled) throw new BadRequestException('2FA is already enabled; disable it first');
     const secret = authenticator.generateSecret();
     const issuer = this.config.get<string>('totp.issuer') ?? 'YWS';
     const otpauth = authenticator.keyuri(user.email, issuer, secret);
@@ -316,7 +341,14 @@ export class AuthService {
     return { twoFactorEnabled: true };
   }
 
-  async disableTwoFactor(userId: string) {
+  async disableTwoFactor(userId: string, code: string) {
+    const user = await this.client.user.findUniqueOrThrow({ where: { id: userId } });
+    // A stolen access token alone must not be enough to drop the second factor.
+    if (user.twoFactorEnabled) {
+      if (!user.totpSecret || !authenticator.check(code, user.totpSecret)) {
+        throw new BadRequestException('Invalid 2FA code');
+      }
+    }
     await this.client.user.update({
       where: { id: userId },
       data: { twoFactorEnabled: false, totpSecret: null },

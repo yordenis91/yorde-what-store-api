@@ -2,6 +2,7 @@ import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import * as nodemailer from 'nodemailer';
+import { resolvePublicSmtpAddress } from '../../common/utils/smtp-guard.util';
 import { EMAIL_QUEUE } from '../queue.constants';
 import { EmailTemplatesService } from '../../modules/email-templates/email-templates.service';
 import { renderTemplate } from '../../modules/email-templates/template-renderer';
@@ -58,12 +59,22 @@ export class EmailProcessor extends WorkerHost {
     if (!tenantSmtp && !platformSmtp) {
       // No SMTP configured (typical in dev) — logging keeps the queue fully
       // functional end to end without requiring real mail infrastructure.
-      this.logger.log(`[no SMTP configured] Would send "${subject}" to ${to}:\n${body}`);
+      // The body can carry a reset link or temporary password: only echo it in local development.
+      const echoBody = process.env.NODE_ENV === 'development' ? `:\n${body}` : ' (body omitted)';
+      this.logger.log(`[no SMTP configured] Would send "${subject}" to ${to}${echoBody}`);
       return;
     }
 
+    // Tenant SMTP settings are tenant-controlled, so the target is vetted (and
+    // pinned to the vetted IP) before we open a connection from inside our network.
     const transporter = tenantSmtp
-      ? buildTransporter(tenantSmtp.host, tenantSmtp.port, tenantSmtp.user, tenantSmtp.password)
+      ? buildTransporter(
+          await resolvePublicSmtpAddress(tenantSmtp.host, tenantSmtp.port),
+          tenantSmtp.port,
+          tenantSmtp.user,
+          tenantSmtp.password,
+          { servername: tenantSmtp.host, requireTLS: true },
+        )
       : buildTransporter(platformSmtp!.host, platformSmtp!.port, platformSmtp!.user, platformSmtp!.password);
     const from = tenantSmtp?.from || platformSmtp?.from;
 
@@ -94,10 +105,17 @@ export class EmailProcessor extends WorkerHost {
  * not just an env var read once at boot) — building fresh per send costs
  * nothing since this doesn't open a connection until `sendMail` is called.
  */
-function buildTransporter(host: string, port: number, user?: string, password?: string): nodemailer.Transporter {
+function buildTransporter(
+  host: string,
+  port: number,
+  user?: string,
+  password?: string,
+  tenant?: { servername: string; requireTLS: boolean },
+): nodemailer.Transporter {
   return nodemailer.createTransport({
     host,
     port,
+    ...(tenant && { requireTLS: tenant.requireTLS, tls: { servername: tenant.servername } }),
     // 465 is implicit TLS from the first byte; every other port (587, 25)
     // starts plaintext and upgrades via STARTTLS, which nodemailer already
     // negotiates on its own when secure is false.

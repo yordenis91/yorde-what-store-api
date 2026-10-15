@@ -24,4 +24,10 @@ describe('toCsv', () => {
 
     expect(csv).toBe('﻿A,B\r\n,');
   });
+
+  it('neutralises spreadsheet formulas in text but leaves numbers alone', () => {
+    const csv = toCsv(['A'], [['=HYPERLINK("http://evil")'], ['@SUM(A1)'], ['+cmd'], ['-5'], [-5], ['Ana']]);
+
+    expect(csv).toBe('\uFEFFA\r\n"\'=HYPERLINK(""http://evil"")"\r\n\'@SUM(A1)\r\n\'+cmd\r\n-5\r\n-5\r\nAna');
+  });
 });

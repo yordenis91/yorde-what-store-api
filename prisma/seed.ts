@@ -21,6 +21,14 @@ async function main() {
   }
 
   const superAdminEmail = process.env.SUPER_ADMIN_EMAIL ?? 'superadmin@yws.dev';
+  // The dev fallback is public knowledge (it is in this file); a production
+  // database must never be seeded with it.
+  if (process.env.NODE_ENV === 'production' && !process.env.SUPER_ADMIN_PASSWORD) {
+    throw new Error('SUPER_ADMIN_PASSWORD must be set when seeding a production database');
+  }
+  if (process.env.SUPER_ADMIN_PASSWORD && process.env.SUPER_ADMIN_PASSWORD.length < 12) {
+    throw new Error('SUPER_ADMIN_PASSWORD must be at least 12 characters');
+  }
   const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD ?? 'SuperAdmin123!';
   const existingSuperAdmin = await prisma.user.findUnique({ where: { email: superAdminEmail } });
   if (!existingSuperAdmin) {
@@ -28,7 +36,7 @@ async function main() {
     await prisma.user.create({
       data: { email: superAdminEmail, name: 'Super Admin', passwordHash, globalRole: 'SUPER_ADMIN' },
     });
-    console.log(`Created SUPER_ADMIN user: ${superAdminEmail} / ${superAdminPassword}`);
+    console.log(`Created SUPER_ADMIN user: ${superAdminEmail}`);
   } else if (existingSuperAdmin.globalRole !== 'SUPER_ADMIN') {
     await prisma.user.update({ where: { id: existingSuperAdmin.id }, data: { globalRole: 'SUPER_ADMIN' } });
     console.log(`Promoted existing user to SUPER_ADMIN: ${superAdminEmail}`);
