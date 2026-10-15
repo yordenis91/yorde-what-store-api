@@ -87,6 +87,12 @@ import { AppService } from './app.service';
           port: parseInt(process.env.REDIS_PORT ?? '6379', 10),
           password: process.env.REDIS_PASSWORD || undefined,
         },
+        // Without these, every finished job (email payloads carry reset links and
+        // temporary passwords) stays in Redis forever and memory grows unbounded.
+        defaultJobOptions: {
+          removeOnComplete: { age: 60 * 60, count: 1000 },
+          removeOnFail: { age: 24 * 60 * 60, count: 1000 },
+        },
       }),
     }),
     ThrottlerModule.forRootAsync({

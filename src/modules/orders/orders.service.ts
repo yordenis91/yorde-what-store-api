@@ -1,3 +1,4 @@
+import { assertSafeImageUrl } from '../uploads/upload-url.util';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
@@ -72,6 +73,7 @@ export class OrdersService {
   }
 
   async create(tenantId: string, dto: CreateOrderDto, customerId?: string) {
+    assertSafeImageUrl(tenantId, dto.paymentProofUrl, 'paymentProofUrl');
     const tenant = await this.prisma.db.tenant.findUniqueOrThrow({ where: { id: tenantId } });
 
     // The storefront only lists channels the plan includes, but the request
@@ -89,7 +91,7 @@ export class OrdersService {
       await this.paymentsService.assertZelleConfigured(tenantId);
     }
 
-    const { pricedLines, coupon, totals } = await this.priceOrder(tenantId, dto);
+    const { pricedLines, coupon, totals } = await this.priceOrder(tenantId, dto, { onlyPublished: true });
     const { subtotal, taxTotal, discountTotal, shippingTotal, grandTotal } = totals;
 
     // Before anything is written. TenantScopeInterceptor runs the whole request
@@ -142,10 +144,12 @@ export class OrdersService {
       include: ORDER_INCLUDE,
     });
 
+    // Queued only once nothing after order creation can still throw and roll the order back, so a customer is never emailed about an order that doesn't exist.
     // Additional to whatever fulfillment channel below — WhatsApp/Telegram already
     // notify the tenant, but an email gives the customer their own paper trail
     // that survives losing the confirmation page or the WhatsApp thread.
-    if (order.customerEmail) {
+    const queueConfirmationEmail = async () => {
+      if (!order.customerEmail) return;
       await this.emailQueue.add(
         'order-confirmation',
         {
@@ -169,10 +173,11 @@ export class OrdersService {
         } satisfies EmailJobData,
         EMAIL_JOB_OPTIONS,
       );
-    }
+    };
 
     if (dto.fulfillmentMethod === 'WHATSAPP' || dto.fulfillmentMethod === 'TELEGRAM') {
       const result = await this.dispatchMessageFulfillment(tenant, order, pricedLines);
+      await queueConfirmationEmail();
       // After every step that could still throw and roll the order back —
       // a false "new order" nudge for staff is worse than a slightly late one.
       // dispatchMessageFulfillment's own update already set this row to
@@ -181,6 +186,7 @@ export class OrdersService {
       return result;
     }
 
+    await queueConfirmationEmail();
     this.orderEvents.emit(tenantId, this.toOrderEvent('order.created', order));
     return { order, fulfillment: { type: dto.fulfillmentMethod as 'STRIPE' | 'MERCADOPAGO' | 'ZELLE' } };
   }
@@ -210,6 +216,7 @@ export class OrdersService {
   }
 
   async submitPaymentProof(tenantId: string, orderId: string, dto: PaymentProofDto) {
+    assertSafeImageUrl(tenantId, dto.proofUrl, 'proofUrl');
     await this.assertAcceptsPaymentProof(tenantId, orderId);
 
     const updated = await this.prisma.db.order.update({
@@ -283,11 +290,16 @@ export class OrdersService {
   private async priceOrder(
     tenantId: string,
     input: { items: OrderItemInputDto[]; couponCode?: string; shippingId?: string },
-    options: { lenientCoupon?: boolean } = {},
+    options: { lenientCoupon?: boolean; onlyPublished?: boolean } = {},
   ) {
     const productIds = input.items.map((i) => i.productId);
     const products = await this.prisma.db.product.findMany({
-      where: { id: { in: productIds }, tenantId },
+      where: {
+        id: { in: productIds },
+        tenantId,
+        // The storefront only sells what it lists; a hidden/draft product's UUID must not be orderable.
+        ...(options.onlyPublished && { isActive: true, isPublished: true }),
+      },
       include: { taxes: { include: { tax: true } }, variants: true },
     });
     const productMap = new Map(products.map((p) => [p.id, p]));
@@ -426,6 +438,7 @@ export class OrdersService {
     const tenant = await this.prisma.db.tenant.findUniqueOrThrow({ where: { id: tenantId } });
     const { pricedLines, coupon, couponError, shipping, totals } = await this.priceOrder(tenantId, dto, {
       lenientCoupon: true,
+      onlyPublished: true,
     });
 
     // Reported, not enforced: the checkout can warn before the customer fills

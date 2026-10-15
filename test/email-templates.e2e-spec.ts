@@ -109,11 +109,19 @@ describe('Email templates (e2e)', () => {
   });
 
   it('forbids a STAFF member from editing templates', async () => {
-    const { tenant, owner } = await seedTenant(prisma, { slug: 'tenant-a' });
+    const { tenant } = await seedTenant(prisma, { slug: 'tenant-a' });
+    // The role is read from the membership on every request, so a forged
+    // tenantRole claim on the owner's token no longer makes them STAFF: this
+    // needs a user who really is one.
+    const staff = await prisma.withRlsBypass(async (tx) => {
+      const user = await tx.user.create({ data: { email: 'staff@example.com', name: 'Staff', passwordHash: 'x' } });
+      await tx.tenantMember.create({ data: { tenantId: tenant.id, userId: user.id, role: 'STAFF' } });
+      return user;
+    });
 
     await request(app.getHttpServer())
       .put('/api/v1/email-templates/staff-invite')
-      .set('Authorization', `Bearer ${tokenFor(owner.id, owner.email, tenant.id, 'STAFF')}`)
+      .set('Authorization', `Bearer ${tokenFor(staff.id, staff.email, tenant.id, 'STAFF')}`)
       .set('X-Tenant-ID', tenant.id)
       .send({ subject: 'x', body: 'y' })
       .expect(403);

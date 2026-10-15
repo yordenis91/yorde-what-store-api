@@ -6,6 +6,9 @@ import { TenantsService } from '../../modules/tenants/tenants.service';
 import { PlatformSettingsService, PlatformMailConfig } from '../../modules/platform-settings/platform-settings.service';
 
 jest.mock('nodemailer');
+jest.mock('../../common/utils/smtp-guard.util', () => ({
+  resolvePublicSmtpAddress: jest.fn((host: string) => Promise.resolve(host)),
+}));
 
 const TEMPLATE = { subject: 'Hello {name}', body: 'Body {name}' };
 

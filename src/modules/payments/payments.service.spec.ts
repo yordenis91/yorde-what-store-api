@@ -19,13 +19,20 @@ function buildService(
 ) {
   const update = jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'order-1', ...data }));
   const findFirst = jest.fn().mockResolvedValue(overrides.order ?? null);
-  const existingOrder = 'existingOrder' in overrides ? overrides.existingOrder : { id: 'order-1', status: 'PENDING' };
+  const existingOrder =
+    'existingOrder' in overrides
+      ? overrides.existingOrder
+      : { id: 'order-1', status: 'PENDING', paymentStatus: 'PENDING', currency: 'USD', grandTotal: 10 };
   const findUnique = jest.fn().mockResolvedValue(existingOrder);
   const withTenant = jest
     .fn()
     .mockImplementation((_tenantId: string, work: (tx: unknown) => unknown) => work({ order: { update, findUnique } }));
 
-  const prisma = { db: { order: { findFirst, update } }, withTenant } as unknown as PrismaService;
+  const tenantFindUniqueOrThrow = jest.fn().mockResolvedValue({ subdomain: null, customDomain: null });
+  const prisma = {
+    db: { order: { findFirst, update }, tenant: { findUniqueOrThrow: tenantFindUniqueOrThrow } },
+    withTenant,
+  } as unknown as PrismaService;
   const tenantsService = {
     getDecryptedCredentials: jest.fn().mockResolvedValue(null),
   } as unknown as TenantsService;
@@ -43,7 +50,14 @@ function buildService(
   } as unknown as MercadoPagoAdapter;
   const invoiceQueue = { add: jest.fn() };
 
-  const service = new PaymentsService(prisma, tenantsService, stripeAdapter, mercadoPagoAdapter, invoiceQueue as any);
+  const service = new PaymentsService(
+    prisma,
+    tenantsService,
+    stripeAdapter,
+    mercadoPagoAdapter,
+    invoiceQueue as any,
+    { get: jest.fn().mockReturnValue(['https://shop.example']) } as any,
+  );
   return {
     service,
     update,
@@ -61,7 +75,10 @@ describe('PaymentsService.createMercadoPagoCheckout', () => {
   it('rejects an order not configured for card payment', async () => {
     const { service } = buildService({ order: { id: 'order-1', fulfillmentMethod: 'WHATSAPP', items: [] } });
     await expect(
-      service.createMercadoPagoCheckout(TENANT_ID, 'order-1', { successUrl: 's', cancelUrl: 'c' }),
+      service.createMercadoPagoCheckout(TENANT_ID, 'order-1', {
+        successUrl: 'https://shop.example/s',
+        cancelUrl: 'https://shop.example/c',
+      }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -72,7 +89,10 @@ describe('PaymentsService.createMercadoPagoCheckout', () => {
       mercadoPagoAdapter: { createCheckout },
     });
 
-    const result = await service.createMercadoPagoCheckout(TENANT_ID, 'order-1', { successUrl: 's', cancelUrl: 'c' });
+    const result = await service.createMercadoPagoCheckout(TENANT_ID, 'order-1', {
+      successUrl: 'https://shop.example/s',
+      cancelUrl: 'https://shop.example/c',
+    });
 
     expect(result).toEqual({ checkoutUrl: 'https://mp/pay', providerReference: 'pref-1' });
     expect(update).toHaveBeenCalledWith({ where: { id: 'order-1' }, data: { mercadoPagoPreferenceId: 'pref-1' } });
@@ -87,6 +107,9 @@ describe('PaymentsService.handleStripeWebhook', () => {
         object: {
           id: 'cs_123',
           payment_intent: 'pi_123',
+          payment_status: 'paid',
+          amount_total: 1000,
+          currency: 'usd',
           metadata: { tenantId: TENANT_ID, orderId: 'order-1' },
           ...overrides,
         },
@@ -101,6 +124,29 @@ describe('PaymentsService.handleStripeWebhook', () => {
     const { service } = buildService({ stripeAdapter: { verifyAndParseWebhook } });
 
     await expect(service.handleStripeWebhook(Buffer.from(''), 'sig')).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('ignores a redelivered event for an order that is already paid', async () => {
+    const verifyAndParseWebhook = jest.fn().mockReturnValue(checkoutCompletedEvent());
+    const { service, update, invoiceQueue } = buildService({
+      stripeAdapter: { verifyAndParseWebhook },
+      existingOrder: { id: 'order-1', status: 'PROCESSING', paymentStatus: 'PAID', currency: 'USD', grandTotal: 10 },
+    });
+
+    await service.handleStripeWebhook(Buffer.from(''), 'sig');
+
+    expect(update).not.toHaveBeenCalled();
+    expect(invoiceQueue.add).not.toHaveBeenCalled();
+  });
+
+  it('does not mark the order paid when the amount charged differs from the order total', async () => {
+    const verifyAndParseWebhook = jest.fn().mockReturnValue(checkoutCompletedEvent({ amount_total: 500 }));
+    const { service, update, invoiceQueue } = buildService({ stripeAdapter: { verifyAndParseWebhook } });
+
+    await service.handleStripeWebhook(Buffer.from(''), 'sig');
+
+    expect(update).not.toHaveBeenCalled();
+    expect(invoiceQueue.add).not.toHaveBeenCalled();
   });
 
   it('marks the order paid and queues the invoice once checkout completes', async () => {
@@ -176,6 +222,8 @@ describe('PaymentsService.handleMercadoPagoWebhook', () => {
     const getPayment = jest.fn().mockResolvedValue({
       id: 12345,
       status: 'approved',
+      transaction_amount: 10,
+      currency_id: 'USD',
       metadata: { tenant_id: TENANT_ID, order_id: 'order-1', order_number: 'ORD-1' },
     });
     const { service, withTenant, invoiceQueue } = buildService({ mercadoPagoAdapter: { getPayment } });
@@ -238,7 +286,7 @@ describe('PaymentsService.refundOrderPayment', () => {
 
     await service.refundOrderPayment(TENANT_ID, order);
 
-    expect(refund).toHaveBeenCalledWith('mp-1', null);
+    expect(refund).toHaveBeenCalledWith('mp-1');
   });
 
   it('does nothing for an order with no online charge to reverse', async () => {

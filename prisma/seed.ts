@@ -1,15 +1,43 @@
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
-import { SEED_TEMPLATES, TEMPLATE_KEYS } from '../src/modules/email-templates/default-templates';
+import {
+  LEGACY_STAFF_INVITE_BODIES,
+  SEED_TEMPLATES,
+  TEMPLATE_KEYS,
+} from '../src/modules/email-templates/default-templates';
 
 const prisma = new PrismaClient();
 
 async function main() {
   const allChannels = ['WHATSAPP', 'TELEGRAM', 'STRIPE', 'MERCADOPAGO', 'ZELLE'] as const;
   const plans = [
-    { name: 'Free', price: 0, duration: 'LIFETIME' as const, maxStores: 1, maxProducts: 20, fulfillmentMethods: ['WHATSAPP'], features: ['1 store', '20 products', 'WhatsApp checkout'] },
-    { name: 'Pro', price: 19, duration: 'MONTHLY' as const, maxStores: 3, maxProducts: 500, fulfillmentMethods: [...allChannels], features: ['3 stores', '500 products', 'Telegram checkout', 'Stripe, MercadoPago & Zelle payments'] },
-    { name: 'Business', price: 49, duration: 'MONTHLY' as const, maxStores: -1, maxProducts: -1, fulfillmentMethods: [...allChannels], features: ['Unlimited stores', 'Unlimited products', 'Every checkout channel', 'Priority support'] },
+    {
+      name: 'Free',
+      price: 0,
+      duration: 'LIFETIME' as const,
+      maxStores: 1,
+      maxProducts: 20,
+      fulfillmentMethods: ['WHATSAPP'],
+      features: ['1 store', '20 products', 'WhatsApp checkout'],
+    },
+    {
+      name: 'Pro',
+      price: 19,
+      duration: 'MONTHLY' as const,
+      maxStores: 3,
+      maxProducts: 500,
+      fulfillmentMethods: [...allChannels],
+      features: ['3 stores', '500 products', 'Telegram checkout', 'Stripe, MercadoPago & Zelle payments'],
+    },
+    {
+      name: 'Business',
+      price: 49,
+      duration: 'MONTHLY' as const,
+      maxStores: -1,
+      maxProducts: -1,
+      fulfillmentMethods: [...allChannels],
+      features: ['Unlimited stores', 'Unlimited products', 'Every checkout channel', 'Priority support'],
+    },
   ];
 
   for (const plan of plans) {
@@ -21,6 +49,14 @@ async function main() {
   }
 
   const superAdminEmail = process.env.SUPER_ADMIN_EMAIL ?? 'superadmin@yws.dev';
+  // The dev fallback is public knowledge (it is in this file); a production
+  // database must never be seeded with it.
+  if (process.env.NODE_ENV === 'production' && !process.env.SUPER_ADMIN_PASSWORD) {
+    throw new Error('SUPER_ADMIN_PASSWORD must be set when seeding a production database');
+  }
+  if (process.env.SUPER_ADMIN_PASSWORD && process.env.SUPER_ADMIN_PASSWORD.length < 12) {
+    throw new Error('SUPER_ADMIN_PASSWORD must be at least 12 characters');
+  }
   const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD ?? 'SuperAdmin123!';
   const existingSuperAdmin = await prisma.user.findUnique({ where: { email: superAdminEmail } });
   if (!existingSuperAdmin) {
@@ -28,7 +64,7 @@ async function main() {
     await prisma.user.create({
       data: { email: superAdminEmail, name: 'Super Admin', passwordHash, globalRole: 'SUPER_ADMIN' },
     });
-    console.log(`Created SUPER_ADMIN user: ${superAdminEmail} / ${superAdminPassword}`);
+    console.log(`Created SUPER_ADMIN user: ${superAdminEmail}`);
   } else if (existingSuperAdmin.globalRole !== 'SUPER_ADMIN') {
     await prisma.user.update({ where: { id: existingSuperAdmin.id }, data: { globalRole: 'SUPER_ADMIN' } });
     console.log(`Promoted existing user to SUPER_ADMIN: ${superAdminEmail}`);
@@ -155,6 +191,9 @@ async function main() {
         if (!existing) {
           await tx.emailTemplate.create({ data: { tenantId: null, key, locale, subject, body } });
           console.log(`Created default email template: ${key} (${locale})`);
+        } else if (key === 'staff-invite' && existing.body === LEGACY_STAFF_INVITE_BODIES[locale]) {
+          await tx.emailTemplate.update({ where: { id: existing.id }, data: { subject, body } });
+          console.log(`Updated default email template to the invite-link version: ${key} (${locale})`);
         }
       });
     }

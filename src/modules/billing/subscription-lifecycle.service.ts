@@ -87,9 +87,28 @@ export class SubscriptionLifecycleService {
     });
     if (count === 0) return false;
 
-    if (notice === 'DOWNGRADED') await this.downgrade(subscription);
-    await this.notify(subscription, notice);
+    try {
+      if (notice === 'DOWNGRADED') await this.downgrade(subscription);
+      await this.notify(subscription, notice);
+    } catch (err) {
+      // Release the claim, or the downgrade/notice would never be retried:
+      // the next hourly run would see it as already handled.
+      await this.releaseNotice(subscription.id, notice);
+      throw err;
+    }
     return true;
+  }
+
+  private async releaseNotice(subscriptionId: string, notice: ExpiryNotice) {
+    const current = await this.prisma.subscription.findUnique({
+      where: { id: subscriptionId },
+      select: { expiryNoticesSent: true },
+    });
+    if (!current) return;
+    await this.prisma.subscription.update({
+      where: { id: subscriptionId },
+      data: { expiryNoticesSent: current.expiryNoticesSent.filter((n) => n !== notice) },
+    });
   }
 
   /**

@@ -27,6 +27,8 @@ export interface JwtPayload {
   tenantRole?: string;
   /** Set only on a short-lived impersonation token (see PlatformTenantsService.impersonate) — the SUPER_ADMIN's own user id. */
   impersonatedBy?: string;
+  /** Set only on a challenge token (e.g. '2fa') — never valid as an access token. */
+  purpose?: string;
 }
 
 @Injectable()
@@ -46,6 +48,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload) {
+    // Challenge tokens (password verified, 2FA pending) share the signing
+    // secret, so they must be refused here or they'd work as access tokens.
+    if (payload.purpose) throw new UnauthorizedException('Invalid token');
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
       select: { id: true, email: true, globalRole: true, isActive: true },
@@ -53,12 +58,24 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (!user || !user.isActive) {
       throw new UnauthorizedException('User no longer active');
     }
+    let tenantRole = payload.tenantRole;
+    // Membership and role are re-read on every request so removing a member
+    // (or changing their role) takes effect immediately, not at token expiry.
+    // Impersonation tokens are issued to a SUPER_ADMIN with no membership.
+    if (payload.tenantId && !payload.impersonatedBy) {
+      const membership = await this.prisma.tenantMember.findFirst({
+        where: { userId: user.id, tenantId: payload.tenantId, isActive: true },
+        select: { role: true },
+      });
+      if (!membership) throw new UnauthorizedException('No longer a member of this tenant');
+      tenantRole = membership.role;
+    }
     return {
       id: user.id,
       email: user.email,
       globalRole: user.globalRole,
       tenantId: payload.tenantId,
-      tenantRole: payload.tenantRole,
+      tenantRole,
       impersonatedBy: payload.impersonatedBy,
     };
   }

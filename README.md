@@ -305,7 +305,7 @@ copy it to `.env` and fill in real secrets before running anything beyond
 | **Stripe** | | |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | — | Optional; checkout fails per-tenant if unset. |
 | **MercadoPago** | | |
-| `MERCADOPAGO_ACCESS_TOKEN` / `MERCADOPAGO_WEBHOOK_SECRET` | — | Platform-level, used only for webhook verification/lookups — per-tenant checkout credentials live encrypted in the database. |
+| `MERCADOPAGO_ACCESS_TOKEN` / `MERCADOPAGO_WEBHOOK_SECRET` | — | Platform account. **Every MercadoPago charge, webhook lookup and refund goes through this one account** — stores cannot bring their own token (their webhooks could not be verified); they only switch the channel on. Required to offer MercadoPago at all. |
 | **Mail** | | |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `MAIL_FROM` | *(empty)* / `587` / ... / `no-reply@example.com` | Unset `SMTP_HOST` means the email processor logs instead of sending — no error. Read once at first boot only, to seed the platform settings row; after that, the admin-editable database row is authoritative. |
 | **Seed** | | |

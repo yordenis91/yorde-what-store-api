@@ -159,6 +159,17 @@ describe('UsersService.inviteStaff', () => {
     );
   });
 
+  it('emails a one-time link, never the password', async () => {
+    const { service, emailQueue, resetTokenCreate } = buildService({ members: [] });
+
+    await service.inviteStaff(TENANT_A, DTO);
+
+    expect(resetTokenCreate).toHaveBeenCalled();
+    const [, payload] = emailQueue.add.mock.calls[0];
+    expect(payload.variables.reset_link).toContain('token=');
+    expect(JSON.stringify(payload)).not.toContain(DTO.temporaryPassword);
+  });
+
   it('rejects inviting an email that is already an active member', async () => {
     const { service, memberCreate, update } = buildService({
       users: [{ id: 'user-1', email: DTO.email }],

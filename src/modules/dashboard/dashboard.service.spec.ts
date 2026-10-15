@@ -5,7 +5,6 @@ const TENANT_ID = 'tenant-1';
 
 function buildService({ periodOrders }: { periodOrders: { createdAt: Date; grandTotal: string }[] }) {
   const orderFindMany = jest.fn((args: { where: Record<string, unknown>; take?: number }) => {
-    if (args.where.paymentStatus === 'PAID') return Promise.resolve([]);
     if (args.take === 5) return Promise.resolve([]); // recent orders
     if ('sessionId' in args.where) return Promise.resolve([]); // order sessions
     return Promise.resolve(periodOrders);
@@ -15,6 +14,7 @@ function buildService({ periodOrders }: { periodOrders: { createdAt: Date; grand
     order: {
       count: jest.fn().mockResolvedValue(0),
       findMany: orderFindMany,
+      aggregate: jest.fn().mockResolvedValue({ _sum: { grandTotal: null } }),
       groupBy: jest.fn().mockResolvedValue([]),
     },
     orderItem: { groupBy: jest.fn().mockResolvedValue([]) },

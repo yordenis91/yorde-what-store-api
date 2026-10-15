@@ -10,31 +10,40 @@ export class MercadoPagoAdapter implements PaymentAdapter {
 
   constructor(private readonly config: ConfigService) {}
 
-  /** Builds a client scoped to per-tenant credentials when present, falling back to the platform's own account. */
-  private clientFor(credentials: Record<string, string> | null): MercadoPagoConfig {
-    const accessToken = credentials?.accessToken ?? this.config.get<string>('mercadoPago.accessToken')!;
-    return new MercadoPagoConfig({ accessToken });
+  /**
+   * Always the platform's own account: the webhook is verified with the
+   * platform secret and payments are looked up with the platform token, so a
+   * charge made under a tenant's token could never be confirmed.
+   */
+  private client(): MercadoPagoConfig {
+    return new MercadoPagoConfig({ accessToken: this.config.get<string>('mercadoPago.accessToken')! });
   }
 
   async createCheckout(
     ctx: CheckoutOrderContext,
-    credentials: Record<string, string> | null,
+    _credentials: Record<string, string> | null,
     urls: { successUrl: string; cancelUrl: string },
   ): Promise<CreateCheckoutResult> {
-    const preference = new Preference(this.clientFor(credentials));
+    const preference = new Preference(this.client());
 
     const result = await preference.create({
       body: {
-        items: ctx.items.map((item, index) => ({
-          id: String(index),
-          title: [item.productName, item.variantName].filter(Boolean).join(' - '),
-          quantity: item.quantity,
-          currency_id: ctx.currency.toUpperCase(),
-          unit_price: item.unitPrice,
-        })),
+        // One line for the whole order: MercadoPago has no supported way to add
+        // shipping/tax or subtract a coupon, and the charge must equal grandTotal.
+        items: [
+          {
+            id: ctx.orderId,
+            title: `Order ${ctx.orderNumber}`,
+            quantity: 1,
+            currency_id: ctx.currency.toUpperCase(),
+            unit_price: ctx.grandTotal,
+          },
+        ],
         payer: ctx.customerEmail ? { email: ctx.customerEmail } : undefined,
         back_urls: { success: urls.successUrl, failure: urls.cancelUrl, pending: urls.successUrl },
         auto_return: 'approved',
+        expires: true,
+        expiration_date_to: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
         external_reference: ctx.orderId,
         // Explicit snake_case keys: MercadoPago has been observed lowercasing/mangling camelCase metadata on round-trip.
         metadata: { tenant_id: ctx.tenantId, order_id: ctx.orderId, order_number: ctx.orderNumber },
@@ -55,12 +64,12 @@ export class MercadoPagoAdapter implements PaymentAdapter {
   }
 
   async getPayment(paymentId: string) {
-    const payment = new Payment(this.clientFor(null));
+    const payment = new Payment(this.client());
     return payment.get({ id: paymentId });
   }
 
-  async refund(providerPaymentId: string, credentials: Record<string, string> | null): Promise<void> {
-    const refund = new PaymentRefund(this.clientFor(credentials));
+  async refund(providerPaymentId: string, _credentials?: Record<string, string> | null): Promise<void> {
+    const refund = new PaymentRefund(this.client());
     await refund.create({ payment_id: providerPaymentId });
   }
 }

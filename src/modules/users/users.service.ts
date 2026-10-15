@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
@@ -11,6 +12,9 @@ import { InviteStaffDto, UpdateMemberDto } from './dto';
 import { staffPasswordLink } from '../../common/utils/public-links';
 
 const BCRYPT_ROUNDS = 12;
+
+/** An invite link outlives a normal reset link: the invitee may not open the email the same hour. */
+const INVITE_LINK_TTL_MS = 72 * 60 * 60 * 1000;
 
 @Injectable()
 export class UsersService {
@@ -35,7 +39,7 @@ export class UsersService {
     let user = await this.prisma.user.findUnique({ where: { email: dto.email } });
 
     if (!user) {
-      const passwordHash = await bcrypt.hash(dto.temporaryPassword, BCRYPT_ROUNDS);
+      const passwordHash = await bcrypt.hash(dto.temporaryPassword ?? randomBytes(24).toString('hex'), BCRYPT_ROUNDS);
       user = await this.prisma.user.create({ data: { email: dto.email, name: dto.name, passwordHash } });
     }
 
@@ -60,6 +64,7 @@ export class UsersService {
       where: { id: tenantId },
       select: { name: true, locale: true },
     });
+    const inviteToken = await issuePasswordResetToken(this.prisma, user.id, INVITE_LINK_TTL_MS);
     await this.emailQueue.add(
       'staff-invite',
       {
@@ -67,7 +72,12 @@ export class UsersService {
         tenantId,
         locale: tenant.locale,
         to: dto.email,
-        variables: { name: dto.name, store_name: tenant.name, temporary_password: dto.temporaryPassword },
+        // A one-time link, not a password: the job payload sits in Redis and the email in a mailbox.
+        variables: {
+          name: dto.name,
+          store_name: tenant.name,
+          reset_link: staffPasswordLink(this.config.get<string | null>('app.publicWebUrl') ?? null, inviteToken),
+        },
       } satisfies EmailJobData,
       EMAIL_JOB_OPTIONS,
     );
@@ -89,6 +99,17 @@ export class UsersService {
     if (member.role === 'OWNER') throw new ConflictException('Cannot remove the store owner');
 
     await this.prisma.tenantMember.update({ where: { id: memberId }, data: { isActive: false } });
+    // Access/refresh tokens already fail the live membership check; also stop
+    // this tenant's push notifications and mobile sessions from lingering.
+    const now = new Date();
+    await this.prisma.deviceToken.updateMany({
+      where: { userId: member.userId, tenantId, revokedAt: null },
+      data: { revokedAt: now },
+    });
+    await this.prisma.mobileRefreshToken.updateMany({
+      where: { userId: member.userId, tenantId, revokedAt: null },
+      data: { revokedAt: now },
+    });
     return { removed: true };
   }
 

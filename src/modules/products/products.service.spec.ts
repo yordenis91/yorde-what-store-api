@@ -108,14 +108,14 @@ describe('ProductsService.create — plan product limit', () => {
 describe('ProductsService.addImage — sortOrder', () => {
   it('appends a new image after the current max sortOrder instead of defaulting to 0', async () => {
     const { service, create } = buildImageService({ images: [{ id: 'img-1' }, { id: 'img-2' }] });
-    await service.addImage(TENANT_ID, PRODUCT_ID, { url: '/uploads/new.webp' });
+    await service.addImage(TENANT_ID, PRODUCT_ID, { url: `/uploads/${TENANT_ID}/new.webp` });
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ sortOrder: 2 }) }));
   });
 
   it('starts at 0 for a product with no images yet', async () => {
     const { service, create, aggregate } = buildImageService({ images: [] });
     aggregate.mockResolvedValue({ _max: { sortOrder: null } });
-    await service.addImage(TENANT_ID, PRODUCT_ID, { url: '/uploads/first.webp' });
+    await service.addImage(TENANT_ID, PRODUCT_ID, { url: `/uploads/${TENANT_ID}/first.webp` });
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ sortOrder: 0 }) }));
   });
 });
@@ -132,7 +132,7 @@ describe('ProductsService.removeImage', () => {
 
     expect(imageFindFirst).toHaveBeenCalledWith({ where: { id: 'img-1', productId: PRODUCT_ID } });
     expect(deleteImage).toHaveBeenCalledWith({ where: { id: 'img-1' } });
-    expect(deleteUploadedFile).toHaveBeenCalledWith('/uploads/tenant-1/img-1.webp');
+    expect(deleteUploadedFile).toHaveBeenCalledWith('/uploads/tenant-1/img-1.webp', TENANT_ID);
   });
 
   it("404s on an image id that isn't this product's, without deleting anything", async () => {

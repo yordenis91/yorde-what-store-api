@@ -6,6 +6,9 @@ export interface CheckoutOrderContext {
   tenantId: string;
   currency: string;
   grandTotal: number;
+  shippingTotal: number;
+  taxTotal: number;
+  discountTotal: number;
   customerEmail?: string | null;
   items: { productName: string; variantName?: string | null; unitPrice: number; quantity: number }[];
 }
@@ -24,7 +27,7 @@ export interface PaymentAdapter {
     urls: { successUrl: string; cancelUrl: string },
   ): Promise<CreateCheckoutResult>;
   /** Reverses a completed charge. `providerPaymentId` is whatever createCheckout's result led to being stored as the order's payment reference (Stripe: the PaymentIntent id). */
-  refund(providerPaymentId: string, credentials: Record<string, string> | null): Promise<void>;
+  refund(providerPaymentId: string, credentials?: Record<string, string> | null): Promise<void>;
 }
 
 export const PAYMENT_ADAPTERS = 'PAYMENT_ADAPTERS';

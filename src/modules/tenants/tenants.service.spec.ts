@@ -1,5 +1,5 @@
 import { ConfigService } from '@nestjs/config';
-import { ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PlansService } from '../plans/plans.service';
 import { deleteUploadedFile } from '../uploads/uploads.util';
@@ -91,7 +91,7 @@ describe('TenantsService.update — stale image cleanup', () => {
 
     await service.update(TENANT_ID, { logoUrl: '/uploads/tenant-1/new-logo.webp' });
 
-    expect(deleteUploadedFile).toHaveBeenCalledWith('/uploads/tenant-1/old-logo.webp');
+    expect(deleteUploadedFile).toHaveBeenCalledWith('/uploads/tenant-1/old-logo.webp', 'tenant-1');
     expect(deleteUploadedFile).toHaveBeenCalledTimes(1);
   });
 
@@ -104,7 +104,7 @@ describe('TenantsService.update — stale image cleanup', () => {
     expect(deleteUploadedFile).not.toHaveBeenCalled();
 
     await service.update(TENANT_ID, { bannerUrl: null as unknown as string });
-    expect(deleteUploadedFile).toHaveBeenCalledWith('/uploads/tenant-1/old-banner.webp');
+    expect(deleteUploadedFile).toHaveBeenCalledWith('/uploads/tenant-1/old-banner.webp', 'tenant-1');
   });
 
   it('does not touch disk when the field is left out of the update entirely', async () => {
@@ -170,6 +170,47 @@ describe('TenantsService plan restrictions', () => {
     });
 
     expect(paymentUpsert).toHaveBeenCalled();
+  });
+});
+
+describe('TenantsService — MercadoPago runs on the platform account', () => {
+  it('rejects a store-supplied MercadoPago token', async () => {
+    const { service, paymentUpsert } = buildService();
+
+    await expect(
+      service.upsertPaymentSetting(TENANT_ID, {
+        provider: 'MERCADOPAGO',
+        credentials: { accessToken: 'APP_USR-tenant' },
+        isEnabled: true,
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(paymentUpsert).not.toHaveBeenCalled();
+  });
+
+  it('enables the channel with no credentials, scrubbing anything stored before', async () => {
+    const { service, paymentUpsert } = buildService();
+
+    await service.upsertPaymentSetting(TENANT_ID, { provider: 'MERCADOPAGO', isEnabled: true });
+
+    expect(paymentUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ credentials: {}, isEnabled: true }),
+        update: { credentials: {}, isEnabled: true },
+      }),
+    );
+  });
+
+  it('still respects the plan when switching the channel on', async () => {
+    const { service } = buildService({ allowedMethods: ['WHATSAPP'] });
+
+    await expect(service.upsertPaymentSetting(TENANT_ID, { provider: 'MERCADOPAGO', isEnabled: true })).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('never hands out per-store MercadoPago credentials', async () => {
+    const { service } = buildService();
+    expect(await service.getDecryptedCredentials(TENANT_ID, 'MERCADOPAGO')).toBeNull();
   });
 });
 

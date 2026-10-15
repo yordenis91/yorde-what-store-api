@@ -1,5 +1,7 @@
 import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Inject, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { decryptSecretOrPlain } from '../../common/utils/crypto.util';
 import { Job } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PUSH_SERVICE, PushService } from '../../notifications/push.service';
@@ -19,6 +21,7 @@ export class OrderNotificationProcessor extends WorkerHost {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(PUSH_SERVICE) private readonly pushService: PushService,
+    private readonly config: ConfigService,
   ) {
     super();
   }
@@ -33,7 +36,8 @@ export class OrderNotificationProcessor extends WorkerHost {
       return;
     }
 
-    const url = `https://api.telegram.org/bot${tenant.telegramBotToken}/sendMessage`;
+    const botToken = decryptSecretOrPlain(tenant.telegramBotToken, this.config.get<string>('security.encryptionKey')!);
+    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

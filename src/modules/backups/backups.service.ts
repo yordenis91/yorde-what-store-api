@@ -49,6 +49,25 @@ export function selectStaleKeys(objects: { key: string; lastModified: Date }[], 
  */
 const PRISMA_ONLY_QUERY_PARAMS = ['schema', 'pgbouncer', 'connection_limit', 'statement_cache_size'];
 
+/**
+ * True when two connection URLs point at the same database, however they are
+ * spelled: extra query params, a different user, host case or an explicit
+ * default port must not let a restore through to the live database.
+ */
+export function pointsAtSameDatabase(a: string | undefined, b: string | undefined): boolean {
+  if (!a || !b) return false;
+  try {
+    const x = new URL(a);
+    const y = new URL(b);
+    const port = (u: URL) => u.port || '5432';
+    const db = (u: URL) => decodeURIComponent(u.pathname.replace(/^\//, ''));
+    return x.hostname.toLowerCase() === y.hostname.toLowerCase() && port(x) === port(y) && db(x) === db(y);
+  } catch {
+    // Unparseable: can't prove it's different, so treat it as the same.
+    return true;
+  }
+}
+
 export function toPgToolsUrl(databaseUrl: string): string {
   const url = new URL(databaseUrl);
   for (const param of PRISMA_ONLY_QUERY_PARAMS) url.searchParams.delete(param);
@@ -179,7 +198,10 @@ export class BackupsService {
    */
   async restore(key: string, targetDatabaseUrl: string): Promise<void> {
     if (!this.s3 || !this.bucket) throw new ServiceUnavailableException('Backups are not configured');
-    if (targetDatabaseUrl === process.env.DATABASE_URL) {
+    if (
+      pointsAtSameDatabase(targetDatabaseUrl, process.env.DATABASE_URL) ||
+      pointsAtSameDatabase(targetDatabaseUrl, this.config.get<string>('backup.databaseUrl'))
+    ) {
       throw new ServiceUnavailableException('Refusing to restore over the live database — point this at a scratch one');
     }
 
