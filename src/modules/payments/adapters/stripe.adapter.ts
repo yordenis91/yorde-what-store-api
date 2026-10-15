@@ -72,6 +72,16 @@ export class StripeAdapter implements PaymentAdapter {
     return { checkoutUrl: session.url!, providerReference: session.id };
   }
 
+  /** Best effort: stops a customer paying an older session of an order that already has a newer one. */
+  async expireSession(sessionId: string, credentials: Record<string, string> | null): Promise<void> {
+    const connectedAccountId = credentials?.connectedAccountId;
+    await this.stripe.checkout.sessions.expire(
+      sessionId,
+      {},
+      connectedAccountId ? { stripeAccount: connectedAccountId } : undefined,
+    );
+  }
+
   verifyAndParseWebhook(rawBody: Buffer, signature: string): Stripe.Event {
     const webhookSecret = this.config.get<string>('stripe.webhookSecret')!;
     return this.stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);

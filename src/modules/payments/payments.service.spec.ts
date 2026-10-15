@@ -23,10 +23,13 @@ function buildService(
     'existingOrder' in overrides
       ? overrides.existingOrder
       : { id: 'order-1', status: 'PENDING', paymentStatus: 'PENDING', currency: 'USD', grandTotal: 10 };
+  const updateMany = jest.fn().mockResolvedValue({ count: 1 });
   const findUnique = jest.fn().mockResolvedValue(existingOrder);
   const withTenant = jest
     .fn()
-    .mockImplementation((_tenantId: string, work: (tx: unknown) => unknown) => work({ order: { update, findUnique } }));
+    .mockImplementation((_tenantId: string, work: (tx: unknown) => unknown) =>
+      work({ order: { update, updateMany, findUnique } }),
+    );
 
   const tenantFindUniqueOrThrow = jest.fn().mockResolvedValue({ subdomain: null, customDomain: null });
   const prisma = {
@@ -61,6 +64,7 @@ function buildService(
   return {
     service,
     update,
+    updateMany,
     findFirst,
     findUnique,
     withTenant,
@@ -149,9 +153,55 @@ describe('PaymentsService.handleStripeWebhook', () => {
     expect(invoiceQueue.add).not.toHaveBeenCalled();
   });
 
+  it('refunds a second payment for an order that is already paid by a different payment intent', async () => {
+    const verifyAndParseWebhook = jest.fn().mockReturnValue(checkoutCompletedEvent({ payment_intent: 'pi_second' }));
+    const refund = jest.fn();
+    const { service, updateMany, invoiceQueue } = buildService({
+      stripeAdapter: { verifyAndParseWebhook, refund },
+      existingOrder: {
+        id: 'order-1',
+        status: 'CONFIRMED',
+        paymentStatus: 'PAID',
+        stripePaymentIntentId: 'pi_first',
+        currency: 'USD',
+        grandTotal: 10,
+      },
+    });
+
+    await service.handleStripeWebhook(Buffer.from(''), 'sig');
+
+    expect(refund).toHaveBeenCalledWith('pi_second', null);
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(invoiceQueue.add).not.toHaveBeenCalled();
+  });
+
+  it('refunds a payment whose amount does not match the order, instead of keeping the money', async () => {
+    const verifyAndParseWebhook = jest.fn().mockReturnValue(checkoutCompletedEvent({ amount_total: 500 }));
+    const refund = jest.fn();
+    const { service, updateMany } = buildService({ stripeAdapter: { verifyAndParseWebhook, refund } });
+
+    await service.handleStripeWebhook(Buffer.from(''), 'sig');
+
+    expect(refund).toHaveBeenCalledWith('pi_123', null);
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it("ignores an event from a Connect account that is not this store's, without touching the order or refunding", async () => {
+    const event = { ...checkoutCompletedEvent(), account: 'acct_attacker' };
+    const verifyAndParseWebhook = jest.fn().mockReturnValue(event);
+    const refund = jest.fn();
+    const { service, updateMany, invoiceQueue } = buildService({ stripeAdapter: { verifyAndParseWebhook, refund } });
+
+    await service.handleStripeWebhook(Buffer.from(''), 'sig');
+
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(invoiceQueue.add).not.toHaveBeenCalled();
+    expect(refund).not.toHaveBeenCalled();
+  });
+
   it('marks the order paid and queues the invoice once checkout completes', async () => {
     const verifyAndParseWebhook = jest.fn().mockReturnValue(checkoutCompletedEvent());
-    const { service, withTenant, update, invoiceQueue } = buildService({
+    const { service, withTenant, updateMany, invoiceQueue } = buildService({
       stripeAdapter: { verifyAndParseWebhook },
     });
 
@@ -159,8 +209,11 @@ describe('PaymentsService.handleStripeWebhook', () => {
 
     expect(result).toEqual({ received: true });
     expect(withTenant).toHaveBeenCalledWith(TENANT_ID, expect.any(Function));
-    expect(update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'order-1' }, data: expect.objectContaining({ paymentStatus: 'PAID' }) }),
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 'order-1' }),
+        data: expect.objectContaining({ paymentStatus: 'PAID' }),
+      }),
     );
     expect(invoiceQueue.add).toHaveBeenCalledWith('generate-invoice', { tenantId: TENANT_ID, orderId: 'order-1' });
   });

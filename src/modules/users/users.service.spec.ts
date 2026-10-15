@@ -48,11 +48,18 @@ function buildService(
   const resetTokenCreate = jest.fn().mockResolvedValue({});
   const dbTenantFindUniqueOrThrow = jest.fn().mockResolvedValue(options.tenant ?? { name: 'Acme', locale: 'en' });
 
-  const prisma = {
+  // Inside a request everything goes through the tenant-scoped client (`db`): a second, root
+  // connection held while the request's own transaction is open can exhaust the pool.
+  const delegates = {
     tenantMember: { findMany, findFirst, update, findUnique: memberFindUnique, create: memberCreate },
     user: { findUnique: userFindUnique, create: userCreate },
     passwordResetToken: { create: resetTokenCreate },
-    db: { tenant: { findUniqueOrThrow: dbTenantFindUniqueOrThrow } },
+    deviceToken: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    mobileRefreshToken: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+  };
+  const prisma = {
+    ...delegates,
+    db: { ...delegates, tenant: { findUniqueOrThrow: dbTenantFindUniqueOrThrow } },
   } as unknown as PrismaService;
 
   const emailQueue = { add: jest.fn().mockResolvedValue({}) };
@@ -168,6 +175,26 @@ describe('UsersService.inviteStaff', () => {
     const [, payload] = emailQueue.add.mock.calls[0];
     expect(payload.variables.reset_link).toContain('token=');
     expect(JSON.stringify(payload)).not.toContain(DTO.temporaryPassword);
+  });
+
+  it("sends the invite through the platform SMTP, never the store owner's", async () => {
+    const { service, emailQueue } = buildService({ members: [] });
+
+    await service.inviteStaff(TENANT_A, DTO);
+
+    expect(emailQueue.add.mock.calls[0][1].viaPlatform).toBe(true);
+  });
+
+  it('mints no set-password token for an account that already existed', async () => {
+    const { service, emailQueue, resetTokenCreate } = buildService({
+      users: [{ id: 'user-1', email: DTO.email }],
+      members: [],
+    });
+
+    await service.inviteStaff(TENANT_A, DTO);
+
+    expect(resetTokenCreate).not.toHaveBeenCalled();
+    expect(emailQueue.add.mock.calls[0][1].variables.reset_link).not.toContain('token=');
   });
 
   it('rejects inviting an email that is already an active member', async () => {

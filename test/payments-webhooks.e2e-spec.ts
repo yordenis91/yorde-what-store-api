@@ -53,10 +53,12 @@ describe('Payment webhooks and checkout guards (e2e)', () => {
     orderId: string,
     session: Partial<{ amount_total: number; currency: string; payment_status: string; payment_intent: string }> = {},
     signature?: string,
+    account?: string,
   ) {
     const payload = JSON.stringify({
       id: 'evt_test',
       object: 'event',
+      ...(account && { account }),
       type: 'checkout.session.completed',
       data: {
         object: {
@@ -106,7 +108,7 @@ describe('Payment webhooks and checkout guards (e2e)', () => {
       expect(invoiceAdd).toHaveBeenCalledTimes(1);
     });
 
-    it('does not mark an order paid when the charged amount differs from its total', async () => {
+    it('does not mark an order paid when the charged amount differs from its total, and returns the money', async () => {
       const { tenant } = await seedTenant(prisma, { slug: 'stripe-short' });
       const order = await seedOrder(prisma, tenant.id, { grandTotal: '100.00' });
 
@@ -114,6 +116,32 @@ describe('Payment webhooks and checkout guards (e2e)', () => {
 
       expect(await orderRow(tenant.id, order.id)).toMatchObject({ status: 'PENDING', paymentStatus: 'PENDING' });
       expect(invoiceAdd).not.toHaveBeenCalled();
+      expect(stripeRefund).toHaveBeenCalledWith('pi_test', null);
+    });
+
+    it('refunds a second payment for an order that was already paid', async () => {
+      const { tenant } = await seedTenant(prisma, { slug: 'stripe-twice' });
+      const order = await seedOrder(prisma, tenant.id);
+      await sendStripeEvent(tenant.id, order.id, { payment_intent: 'pi_first' }).expect(201);
+      expect(stripeRefund).not.toHaveBeenCalled();
+
+      await sendStripeEvent(tenant.id, order.id, { payment_intent: 'pi_second' }).expect(201);
+
+      expect(stripeRefund).toHaveBeenCalledTimes(1);
+      expect(stripeRefund).toHaveBeenCalledWith('pi_second', null);
+      expect((await orderRow(tenant.id, order.id)).stripePaymentIntentId).toBe('pi_first');
+      expect(invoiceAdd).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores a paid session from a Connect account that is not the store's, and does not refund it", async () => {
+      const { tenant } = await seedTenant(prisma, { slug: 'stripe-forged' });
+      const order = await seedOrder(prisma, tenant.id);
+
+      await sendStripeEvent(tenant.id, order.id, {}, undefined, 'acct_attacker').expect(201);
+
+      expect(await orderRow(tenant.id, order.id)).toMatchObject({ status: 'PENDING', paymentStatus: 'PENDING' });
+      expect(invoiceAdd).not.toHaveBeenCalled();
+      expect(stripeRefund).not.toHaveBeenCalled();
     });
 
     it('does not mark an order paid when the charge is in another currency', async () => {
@@ -172,6 +200,18 @@ describe('Payment webhooks and checkout guards (e2e)', () => {
       }).expect(409);
     });
 
+    it("refuses a look-alike store subdomain on someone else's domain", async () => {
+      const { tenant } = await seedTenant(prisma, { slug: 'co-lookalike' });
+      await prisma.tenant.update({ where: { id: tenant.id }, data: { subdomain: 'shop' } });
+      const order = await seedOrder(prisma, tenant.id);
+
+      await checkout(tenant.id, {
+        orderId: order.id,
+        successUrl: 'https://shop.evil.example/ok',
+        cancelUrl: 'https://shop.evil.example/cancel',
+      }).expect(400);
+    });
+
     it('refuses return URLs that point away from the store', async () => {
       const { tenant } = await seedTenant(prisma, { slug: 'co-redirect' });
       const order = await seedOrder(prisma, tenant.id);
@@ -228,7 +268,23 @@ describe('Payment webhooks and checkout guards (e2e)', () => {
       expect(invoiceAdd).toHaveBeenCalledTimes(1);
     });
 
-    it('does not confirm an order when the approved amount is short', async () => {
+    it('refunds a second, different MercadoPago payment for an order that is already paid', async () => {
+      const { tenant } = await seedTenant(prisma, { slug: 'mp-twice' });
+      const order = await seedOrder(prisma, tenant.id, { fulfillmentMethod: 'MERCADOPAGO', currency: 'ARS' });
+      approved(tenant.id, order.id);
+      await notify().expect(201);
+      approved(tenant.id, order.id, { id: 777 });
+
+      await http()
+        .post('/api/v1/payments/mercadopago/webhook')
+        .query({ 'data.id': '777', type: 'payment' })
+        .expect(201);
+
+      expect(mpRefund).toHaveBeenCalledWith('777');
+      expect((await orderRow(tenant.id, order.id)).mercadoPagoPaymentId).toBe('555');
+    });
+
+    it('does not confirm an order when the approved amount is short, and returns the money', async () => {
       const { tenant } = await seedTenant(prisma, { slug: 'mp-short' });
       const order = await seedOrder(prisma, tenant.id, { fulfillmentMethod: 'MERCADOPAGO', currency: 'ARS' });
       approved(tenant.id, order.id, { transaction_amount: 40 });
@@ -237,6 +293,7 @@ describe('Payment webhooks and checkout guards (e2e)', () => {
 
       expect((await orderRow(tenant.id, order.id)).paymentStatus).toBe('PENDING');
       expect(invoiceAdd).not.toHaveBeenCalled();
+      expect(mpRefund).toHaveBeenCalledWith('555');
     });
 
     it('refunds an approved payment for an order that was cancelled, through the platform account', async () => {

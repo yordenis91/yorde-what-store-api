@@ -28,7 +28,7 @@ export class UsersService {
     // removeMember only soft-deletes (isActive: false) so it can be undone —
     // without this filter a "removed" member never actually disappears from
     // the roster the OWNER sees.
-    return this.prisma.tenantMember.findMany({
+    return this.prisma.db.tenantMember.findMany({
       where: { tenantId, isActive: true },
       include: { user: { select: { id: true, email: true, name: true, isActive: true } } },
       orderBy: { createdAt: 'asc' },
@@ -36,14 +36,18 @@ export class UsersService {
   }
 
   async inviteStaff(tenantId: string, dto: InviteStaffDto) {
-    let user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    let user = await this.prisma.db.user.findUnique({ where: { email: dto.email } });
+    // A set-password link is only ever minted for an account this invite just created. An existing
+    // account (possibly another store's owner or a platform admin) is added without a token: handing
+    // any store owner a credential-bearing link for someone else's account is account takeover.
+    const isNewUser = !user;
 
     if (!user) {
       const passwordHash = await bcrypt.hash(dto.temporaryPassword ?? randomBytes(24).toString('hex'), BCRYPT_ROUNDS);
-      user = await this.prisma.user.create({ data: { email: dto.email, name: dto.name, passwordHash } });
+      user = await this.prisma.db.user.create({ data: { email: dto.email, name: dto.name, passwordHash } });
     }
 
-    const existingMembership = await this.prisma.tenantMember.findUnique({
+    const existingMembership = await this.prisma.db.tenantMember.findUnique({
       where: { tenantId_userId: { tenantId, userId: user.id } },
     });
     if (existingMembership?.isActive) throw new ConflictException('User is already a member of this store');
@@ -52,11 +56,11 @@ export class UsersService {
     // row instead of colliding with the tenantId+userId unique constraint —
     // otherwise an OWNER could never undo a mistaken removal.
     const membership = existingMembership
-      ? await this.prisma.tenantMember.update({
+      ? await this.prisma.db.tenantMember.update({
           where: { id: existingMembership.id },
           data: { isActive: true, role: 'STAFF', permissions: dto.permissions ?? [] },
         })
-      : await this.prisma.tenantMember.create({
+      : await this.prisma.db.tenantMember.create({
           data: { tenantId, userId: user.id, role: 'STAFF', permissions: dto.permissions ?? [] },
         });
 
@@ -64,7 +68,7 @@ export class UsersService {
       where: { id: tenantId },
       select: { name: true, locale: true },
     });
-    const inviteToken = await issuePasswordResetToken(this.prisma, user.id, INVITE_LINK_TTL_MS);
+    const inviteToken = isNewUser ? await issuePasswordResetToken(this.prisma.db, user.id, INVITE_LINK_TTL_MS) : null;
     await this.emailQueue.add(
       'staff-invite',
       {
@@ -76,8 +80,11 @@ export class UsersService {
         variables: {
           name: dto.name,
           store_name: tenant.name,
-          reset_link: staffPasswordLink(this.config.get<string | null>('app.publicWebUrl') ?? null, inviteToken),
+          reset_link: inviteToken
+            ? staffPasswordLink(this.config.get<string | null>('app.publicWebUrl') ?? null, inviteToken)
+            : `${this.config.get<string | null>('app.publicWebUrl') ?? ''}/login`,
         },
+        viaPlatform: true,
       } satisfies EmailJobData,
       EMAIL_JOB_OPTIONS,
     );
@@ -86,27 +93,27 @@ export class UsersService {
   }
 
   async updateMember(tenantId: string, memberId: string, dto: UpdateMemberDto) {
-    const member = await this.prisma.tenantMember.findFirst({ where: { id: memberId, tenantId } });
+    const member = await this.prisma.db.tenantMember.findFirst({ where: { id: memberId, tenantId } });
     if (!member) throw new NotFoundException('Member not found');
     if (member.role === 'OWNER') throw new ConflictException('Cannot modify the store owner membership');
 
-    return this.prisma.tenantMember.update({ where: { id: memberId }, data: dto as any });
+    return this.prisma.db.tenantMember.update({ where: { id: memberId }, data: dto as any });
   }
 
   async removeMember(tenantId: string, memberId: string) {
-    const member = await this.prisma.tenantMember.findFirst({ where: { id: memberId, tenantId } });
+    const member = await this.prisma.db.tenantMember.findFirst({ where: { id: memberId, tenantId } });
     if (!member) throw new NotFoundException('Member not found');
     if (member.role === 'OWNER') throw new ConflictException('Cannot remove the store owner');
 
-    await this.prisma.tenantMember.update({ where: { id: memberId }, data: { isActive: false } });
+    await this.prisma.db.tenantMember.update({ where: { id: memberId }, data: { isActive: false } });
     // Access/refresh tokens already fail the live membership check; also stop
     // this tenant's push notifications and mobile sessions from lingering.
     const now = new Date();
-    await this.prisma.deviceToken.updateMany({
+    await this.prisma.db.deviceToken.updateMany({
       where: { userId: member.userId, tenantId, revokedAt: null },
       data: { revokedAt: now },
     });
-    await this.prisma.mobileRefreshToken.updateMany({
+    await this.prisma.db.mobileRefreshToken.updateMany({
       where: { userId: member.userId, tenantId, revokedAt: null },
       data: { revokedAt: now },
     });
@@ -120,7 +127,7 @@ export class UsersService {
    * flow (AuthService.forgotPassword) — see password-reset.util.ts.
    */
   async resetMemberPassword(tenantId: string, memberId: string) {
-    const member = await this.prisma.tenantMember.findFirst({
+    const member = await this.prisma.db.tenantMember.findFirst({
       where: { id: memberId, tenantId },
       include: { user: true },
     });
@@ -131,7 +138,7 @@ export class UsersService {
       where: { id: tenantId },
       select: { name: true, locale: true },
     });
-    const rawToken = await issuePasswordResetToken(this.prisma, member.userId);
+    const rawToken = await issuePasswordResetToken(this.prisma.db, member.userId);
     await this.emailQueue.add(
       'password-reset',
       {
@@ -144,6 +151,7 @@ export class UsersService {
           store_name: tenant.name,
           reset_link: staffPasswordLink(this.config.get<string | null>('app.publicWebUrl') ?? null, rawToken),
         },
+        viaPlatform: true,
       } satisfies EmailJobData,
       EMAIL_JOB_OPTIONS,
     );
