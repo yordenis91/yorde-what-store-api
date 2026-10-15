@@ -19,7 +19,7 @@ function buildService({ periodOrders }: { periodOrders: { createdAt: Date; grand
     },
     orderItem: { groupBy: jest.fn().mockResolvedValue([]) },
     coupon: { findMany: jest.fn().mockResolvedValue([]) },
-    visit: { findMany: jest.fn().mockResolvedValue([]) },
+    $queryRaw: jest.fn().mockResolvedValue([]),
   };
   const service = new DashboardService({ db } as unknown as PrismaService);
   return { service, db, orderFindMany };

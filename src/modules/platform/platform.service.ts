@@ -49,29 +49,63 @@ export class PlatformService {
    * `periodOrders`'s own count isn't (that one tracks order *activity*, not money).
    */
   private async getPeriodStats(from: Date, days: number) {
-    const { totalOrders, totalRevenue, periodOrders, periodPaidOrders } = await this.prisma.withRlsBypass(
+    const { totalOrders, lifetimeByCurrency, periodOrders, periodPaidOrders } = await this.prisma.withRlsBypass(
       async (tx) => {
-        const [totalOrders, allPaidOrders, periodOrders, periodPaidOrders] = await Promise.all([
+        const [totalOrders, lifetimeByCurrency, periodOrders, periodPaidOrders] = await Promise.all([
           tx.order.count(),
-          tx.order.aggregate({ where: { paymentStatus: 'PAID' }, _sum: { grandTotal: true } }),
+          tx.order.groupBy({ by: ['currency'], where: { paymentStatus: 'PAID' }, _sum: { grandTotal: true } }),
           tx.order.count({ where: { createdAt: { gte: from } } }),
           tx.order.findMany({
             where: { paymentStatus: 'PAID', createdAt: { gte: from } },
-            select: { tenantId: true, grandTotal: true, createdAt: true },
+            select: { tenantId: true, currency: true, grandTotal: true, createdAt: true },
           }),
         ]);
-        return {
-          totalOrders,
-          totalRevenue: Number(allPaidOrders._sum.grandTotal ?? 0),
-          periodOrders,
-          periodPaidOrders,
-        };
+        return { totalOrders, lifetimeByCurrency, periodOrders, periodPaidOrders };
       },
     );
+
+    const involvedTenantIds = Array.from(new Set(periodPaidOrders.map((o) => o.tenantId)));
+    const involvedTenants = involvedTenantIds.length
+      ? await this.prisma.tenant.findMany({
+          where: { id: { in: involvedTenantIds } },
+          select: { id: true, name: true, slug: true, commissionRate: true },
+        })
+      : [];
+    const tenantById = new Map(involvedTenants.map((t) => [t.id, t]));
+    const defaultCommissionRate = await this.platformSettings.getDefaultCommissionRate();
+
+    // Orders carry the currency their store charged in, and amounts in different
+    // currencies can't be added together. Everything is totalled per currency;
+    // the flat fields below describe the one that moves the most money.
+    const byCurrency = new Map<string, { periodRevenue: number; commissionsTotal: number; totalRevenue: number }>();
+    const entryFor = (currency: string) => {
+      let entry = byCurrency.get(currency);
+      if (!entry) {
+        entry = { periodRevenue: 0, commissionsTotal: 0, totalRevenue: 0 };
+        byCurrency.set(currency, entry);
+      }
+      return entry;
+    };
+    for (const row of lifetimeByCurrency) entryFor(row.currency).totalRevenue = Number(row._sum.grandTotal ?? 0);
+    for (const order of periodPaidOrders) {
+      const entry = entryFor(order.currency);
+      const amount = Number(order.grandTotal);
+      const override = tenantById.get(order.tenantId)?.commissionRate;
+      const rate = override !== undefined && override !== null ? Number(override) : defaultCommissionRate;
+      entry.periodRevenue += amount;
+      entry.commissionsTotal += amount * (rate / 100);
+    }
+
+    const ranked = Array.from(byCurrency.entries()).sort(
+      (a, b) => b[1].periodRevenue - a[1].periodRevenue || b[1].totalRevenue - a[1].totalRevenue,
+    );
+    const currency = ranked[0]?.[0] ?? null;
+    const primary = ranked[0]?.[1] ?? { periodRevenue: 0, commissionsTotal: 0, totalRevenue: 0 };
 
     const gmvBuckets = buildDayBuckets(from, days, () => ({ orders: 0, gmv: 0 }));
     const tenantTotals = new Map<string, number>();
     for (const order of periodPaidOrders) {
+      if (order.currency !== currency) continue;
       const bucket = gmvBuckets.get(dayKey(order.createdAt));
       if (bucket) {
         bucket.orders += 1;
@@ -80,16 +114,6 @@ export class PlatformService {
       tenantTotals.set(order.tenantId, (tenantTotals.get(order.tenantId) ?? 0) + Number(order.grandTotal));
     }
     const gmvOverTime = Array.from(gmvBuckets.entries()).map(([date, v]) => ({ date, ...v }));
-    const periodRevenue = periodPaidOrders.reduce((sum, o) => sum + Number(o.grandTotal), 0);
-
-    const involvedTenantIds = Array.from(tenantTotals.keys());
-    const involvedTenants = involvedTenantIds.length
-      ? await this.prisma.tenant.findMany({
-          where: { id: { in: involvedTenantIds } },
-          select: { id: true, name: true, slug: true, commissionRate: true },
-        })
-      : [];
-    const tenantById = new Map(involvedTenants.map((t) => [t.id, t]));
 
     const topTenantsByRevenue = Array.from(tenantTotals.entries())
       .sort((a, b) => b[1] - a[1])
@@ -101,23 +125,19 @@ export class PlatformService {
         revenue,
       }));
 
-    const defaultCommissionRate = await this.platformSettings.getDefaultCommissionRate();
-    let commissionsTotal = 0;
-    for (const order of periodPaidOrders) {
-      const override = tenantById.get(order.tenantId)?.commissionRate;
-      const rate = override !== undefined && override !== null ? Number(override) : defaultCommissionRate;
-      commissionsTotal += Number(order.grandTotal) * (rate / 100);
-    }
-
     return {
       totalOrders,
-      totalRevenue,
+      totalRevenue: primary.totalRevenue,
       periodOrders,
-      periodRevenue,
+      periodRevenue: primary.periodRevenue,
       gmvOverTime,
       topTenantsByRevenue,
-      commissionsTotal,
+      commissionsTotal: primary.commissionsTotal,
       defaultCommissionRate,
+      // The currency the flat money fields above are in, and the full per-currency picture.
+      currency,
+      mixedCurrencies: byCurrency.size > 1,
+      byCurrency: ranked.map(([code, v]) => ({ currency: code, ...v })),
     };
   }
 
