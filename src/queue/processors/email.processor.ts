@@ -5,7 +5,7 @@ import * as nodemailer from 'nodemailer';
 import { resolvePublicSmtpAddress } from '../../common/utils/smtp-guard.util';
 import { EMAIL_QUEUE } from '../queue.constants';
 import { EmailTemplatesService } from '../../modules/email-templates/email-templates.service';
-import { renderTemplate } from '../../modules/email-templates/template-renderer';
+import { adaptLegacyInviteBody, renderTemplate } from '../../modules/email-templates/template-renderer';
 import {
   EmailTemplateKey,
   isPlatformEmailKey,
@@ -49,7 +49,10 @@ export class EmailProcessor extends WorkerHost {
       ? platformTemplates[locale?.startsWith('es') ? 'es' : 'en']
       : await this.emailTemplates.resolveForSend(tenantId, templateKey as EmailTemplateKey, locale);
     const subject = renderTemplate(template.subject, variables);
-    const body = renderTemplate(template.body, variables);
+    const body = renderTemplate(
+      templateKey === 'staff-invite' ? adaptLegacyInviteBody(template.body, locale) : template.body,
+      variables,
+    );
 
     const tenantSmtp = platformTemplates ? null : await this.tenants.getDecryptedSmtpConfig(tenantId);
     // The platform default "from" still applies even when the tenant has a

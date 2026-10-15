@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { DashboardRange } from './dto/dashboard-query.dto';
 import { buildDayBuckets, dayKey, rangeDays, rangeStart } from '../../common/utils/date-range-buckets.util';
@@ -28,7 +29,7 @@ export class DashboardService {
       recentOrders,
       topItems,
       couponGroups,
-      periodVisits,
+      visitStats,
       periodOrderSessions,
     ] = await Promise.all([
       this.prisma.db.product.count({ where: { tenantId } }),
@@ -66,10 +67,7 @@ export class DashboardService {
         orderBy: { _sum: { discountTotal: 'desc' } },
         take: 5,
       }),
-      this.prisma.db.visit.findMany({
-        where: { tenantId, createdAt: { gte: from } },
-        select: { createdAt: true, sessionId: true, referrer: true },
-      }),
+      this.getVisitStats(tenantId, from),
       // Every order's own sessionId, independent of the Visit table (which
       // is purged after 60 days) — a converted session still counts within
       // a 90-day dashboard range long after its Visit rows are gone.
@@ -116,37 +114,26 @@ export class DashboardService {
 
     // Real visitor/conversion metrics, session-based rather than raw pageviews:
     // a shopper who looks at 10 pages before buying is one visitor, not ten.
-    const visitorBuckets = buildDayBuckets(from, days, () => ({ visitors: new Set<string>(), pageviews: 0 }));
-    const uniqueVisitorIds = new Set<string>();
-    const referrerSessions = new Map<string, Set<string>>();
-    for (const visit of periodVisits) {
-      const bucket = visitorBuckets.get(dayKey(visit.createdAt));
+    const visitorBuckets = buildDayBuckets(from, days, () => ({ visitors: 0, pageviews: 0 }));
+    for (const row of visitStats.perDay) {
+      const bucket = visitorBuckets.get(row.day);
       if (bucket) {
-        bucket.pageviews += 1;
-        if (visit.sessionId) bucket.visitors.add(visit.sessionId);
-      }
-      if (visit.sessionId) uniqueVisitorIds.add(visit.sessionId);
-      if (visit.referrer) {
-        const set = referrerSessions.get(visit.referrer) ?? new Set<string>();
-        if (visit.sessionId) set.add(visit.sessionId);
-        referrerSessions.set(visit.referrer, set);
+        bucket.pageviews = row.pageviews;
+        bucket.visitors = row.visitors;
       }
     }
     const visitsOverTime = Array.from(visitorBuckets.entries()).map(([date, v]) => ({
       date,
-      visitors: v.visitors.size,
+      visitors: v.visitors,
       pageviews: v.pageviews,
     }));
-    const totalPageviews = periodVisits.length;
-    const uniqueVisitors = uniqueVisitorIds.size;
+    const totalPageviews = visitStats.totalPageviews;
+    const uniqueVisitors = visitStats.uniqueVisitors;
 
     const convertedSessions = periodOrderSessions.length;
     const conversionRate = uniqueVisitors > 0 ? convertedSessions / uniqueVisitors : null;
 
-    const topReferrers = Array.from(referrerSessions.entries())
-      .map(([referrer, sessions]) => ({ referrer, sessions: sessions.size }))
-      .sort((a, b) => b.sessions - a.sessions)
-      .slice(0, 5);
+    const topReferrers = visitStats.topReferrers;
 
     return {
       range,
@@ -166,6 +153,42 @@ export class DashboardService {
       conversionRate,
       visitsOverTime,
       topReferrers,
+    };
+  }
+
+  /**
+   * Aggregated in the database. Every pageview is a row, so loading them to
+   * count in memory grows with traffic rather than with the number of orders.
+   * Days are UTC and `created_at` is stored as UTC, matching `dayKey`.
+   */
+  private async getVisitStats(tenantId: string, from: Date) {
+    const db = this.prisma.db;
+    const [perDay, totals, referrers] = await Promise.all([
+      db.$queryRaw<{ day: string; pageviews: number; visitors: number }[]>(Prisma.sql`
+        SELECT to_char(created_at, 'YYYY-MM-DD') AS day,
+               count(*)::int AS pageviews,
+               count(DISTINCT session_id)::int AS visitors
+        FROM visits
+        WHERE tenant_id = ${tenantId}::uuid AND created_at >= ${from}
+        GROUP BY 1`),
+      db.$queryRaw<{ pageviews: number; visitors: number }[]>(Prisma.sql`
+        SELECT count(*)::int AS pageviews, count(DISTINCT session_id)::int AS visitors
+        FROM visits
+        WHERE tenant_id = ${tenantId}::uuid AND created_at >= ${from}`),
+      db.$queryRaw<{ referrer: string; sessions: number }[]>(Prisma.sql`
+        SELECT referrer, count(DISTINCT session_id)::int AS sessions
+        FROM visits
+        WHERE tenant_id = ${tenantId}::uuid AND created_at >= ${from}
+          AND referrer IS NOT NULL AND session_id IS NOT NULL
+        GROUP BY referrer
+        ORDER BY sessions DESC, referrer ASC
+        LIMIT 5`),
+    ]);
+    return {
+      perDay,
+      totalPageviews: totals[0]?.pageviews ?? 0,
+      uniqueVisitors: totals[0]?.visitors ?? 0,
+      topReferrers: referrers.map((r) => ({ referrer: r.referrer, sessions: r.sessions })),
     };
   }
 }

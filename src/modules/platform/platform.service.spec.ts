@@ -26,7 +26,7 @@ function buildDouble(options: {
         order: {
           count: jest.fn().mockResolvedValue(0),
           findMany: jest.fn().mockResolvedValue([]),
-          aggregate: jest.fn().mockResolvedValue({ _sum: { grandTotal: null } }),
+          groupBy: jest.fn().mockResolvedValue([]),
         },
       }),
     ),
@@ -132,13 +132,15 @@ describe('PlatformService billing summary', () => {
  */
 describe('PlatformService period stats — commissions and GMV', () => {
   function buildPeriodDouble(options: {
-    periodPaidOrders: { tenantId: string; grandTotal: string; createdAt: Date }[];
+    periodPaidOrders: { tenantId: string; grandTotal: string; createdAt: Date; currency?: string }[];
     tenants?: { id: string; name: string; slug: string; commissionRate: string | null }[];
     defaultCommissionRate?: number;
   }) {
     const orderCount = jest.fn().mockResolvedValueOnce(0).mockResolvedValueOnce(0);
-    const orderFindMany = jest.fn().mockResolvedValueOnce(options.periodPaidOrders);
-    const orderAggregate = jest.fn().mockResolvedValue({ _sum: { grandTotal: null } }); // lifetime totalRevenue — irrelevant here
+    const orderFindMany = jest
+      .fn()
+      .mockResolvedValueOnce(options.periodPaidOrders.map((o) => ({ currency: 'USD', ...o })));
+    const orderGroupBy = jest.fn().mockResolvedValue([]); // lifetime totalRevenue — irrelevant here
 
     const tenantFindMany = jest.fn().mockResolvedValue(options.tenants ?? []);
 
@@ -147,7 +149,7 @@ describe('PlatformService period stats — commissions and GMV', () => {
       user: { count: jest.fn().mockResolvedValue(0) },
       subscription: { findMany: jest.fn().mockResolvedValue([]) },
       withRlsBypass: jest.fn(async (work: (tx: unknown) => Promise<unknown>) =>
-        work({ order: { count: orderCount, findMany: orderFindMany, aggregate: orderAggregate } }),
+        work({ order: { count: orderCount, findMany: orderFindMany, groupBy: orderGroupBy } }),
       ),
     } as unknown as PrismaService;
 
@@ -214,5 +216,49 @@ describe('PlatformService period stats — commissions and GMV', () => {
 
     const nonEmptyBuckets = summary.gmvOverTime.filter((b) => b.orders > 0);
     expect(nonEmptyBuckets).toEqual([{ date: expect.any(String), orders: 1, gmv: 75 }]);
+  });
+});
+
+/** Amounts in different currencies must never be added into one figure. */
+describe('PlatformService period stats — mixed currencies', () => {
+  function build(periodPaidOrders: Record<string, unknown>[], lifetime: { currency: string; total: string }[]) {
+    const orderFindMany = jest.fn().mockResolvedValueOnce(periodPaidOrders);
+    const orderGroupBy = jest
+      .fn()
+      .mockResolvedValue(lifetime.map((l) => ({ currency: l.currency, _sum: { grandTotal: l.total } })));
+    const prisma = {
+      tenant: { count: jest.fn().mockResolvedValue(0), findMany: jest.fn().mockResolvedValue([]) },
+      user: { count: jest.fn().mockResolvedValue(0) },
+      subscription: { findMany: jest.fn().mockResolvedValue([]) },
+      withRlsBypass: jest.fn(async (work: (tx: unknown) => Promise<unknown>) =>
+        work({ order: { count: jest.fn().mockResolvedValue(0), findMany: orderFindMany, groupBy: orderGroupBy } }),
+      ),
+    } as unknown as PrismaService;
+    const settings = { getDefaultCommissionRate: () => Promise.resolve(10) } as unknown as PlatformSettingsService;
+    return new PlatformService(prisma, settings);
+  }
+
+  it('reports each currency separately and keeps the flat fields to the dominant one', async () => {
+    const now = new Date();
+    const service = build(
+      [
+        { tenantId: 't1', currency: 'USD', grandTotal: '100', createdAt: now },
+        { tenantId: 't2', currency: 'CLP', grandTotal: '50000', createdAt: now },
+      ],
+      [
+        { currency: 'USD', total: '1000' },
+        { currency: 'CLP', total: '900000' },
+      ],
+    );
+
+    const summary = await service.getSummary();
+
+    expect(summary.mixedCurrencies).toBe(true);
+    expect(summary.currency).toBe('CLP');
+    expect(summary.periodRevenue).toBe(50000);
+    expect(summary.byCurrency).toEqual([
+      { currency: 'CLP', periodRevenue: 50000, commissionsTotal: 5000, totalRevenue: 900000 },
+      { currency: 'USD', periodRevenue: 100, commissionsTotal: 10, totalRevenue: 1000 },
+    ]);
   });
 });
