@@ -3,6 +3,21 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PlatformService } from './platform.service';
 import { PlatformSettingsService } from '../platform-settings/platform-settings.service';
 
+/** What the grouped SQL query returns: one row per tenant, currency and UTC day. */
+function toDayRows(orders: { tenantId: string; currency?: string; grandTotal: string; createdAt: Date }[]) {
+  const rows = new Map<string, { tenantId: string; currency: string; day: string; orders: number; amount: number }>();
+  for (const o of orders) {
+    const currency = o.currency ?? 'USD';
+    const day = o.createdAt.toISOString().slice(0, 10);
+    const key = `${o.tenantId}|${currency}|${day}`;
+    const row = rows.get(key) ?? { tenantId: o.tenantId, currency, day, orders: 0, amount: 0 };
+    row.orders += 1;
+    row.amount += Number(o.grandTotal);
+    rows.set(key, row);
+  }
+  return Array.from(rows.values()).map((r) => ({ ...r, amount: String(r.amount) }));
+}
+
 /**
  * The billing-summary math (MRR normalization across plan durations) is
  * pure enough to check against a Prisma double rather than a database —
@@ -25,9 +40,9 @@ function buildDouble(options: {
       work({
         order: {
           count: jest.fn().mockResolvedValue(0),
-          findMany: jest.fn().mockResolvedValue([]),
           groupBy: jest.fn().mockResolvedValue([]),
         },
+        $queryRaw: jest.fn().mockResolvedValue([]),
       }),
     ),
   };
@@ -137,9 +152,7 @@ describe('PlatformService period stats — commissions and GMV', () => {
     defaultCommissionRate?: number;
   }) {
     const orderCount = jest.fn().mockResolvedValueOnce(0).mockResolvedValueOnce(0);
-    const orderFindMany = jest
-      .fn()
-      .mockResolvedValueOnce(options.periodPaidOrders.map((o) => ({ currency: 'USD', ...o })));
+    const queryRaw = jest.fn().mockResolvedValue(toDayRows(options.periodPaidOrders));
     const orderGroupBy = jest.fn().mockResolvedValue([]); // lifetime totalRevenue — irrelevant here
 
     const tenantFindMany = jest.fn().mockResolvedValue(options.tenants ?? []);
@@ -149,7 +162,7 @@ describe('PlatformService period stats — commissions and GMV', () => {
       user: { count: jest.fn().mockResolvedValue(0) },
       subscription: { findMany: jest.fn().mockResolvedValue([]) },
       withRlsBypass: jest.fn(async (work: (tx: unknown) => Promise<unknown>) =>
-        work({ order: { count: orderCount, findMany: orderFindMany, groupBy: orderGroupBy } }),
+        work({ order: { count: orderCount, groupBy: orderGroupBy }, $queryRaw: queryRaw }),
       ),
     } as unknown as PrismaService;
 
@@ -222,7 +235,7 @@ describe('PlatformService period stats — commissions and GMV', () => {
 /** Amounts in different currencies must never be added into one figure. */
 describe('PlatformService period stats — mixed currencies', () => {
   function build(periodPaidOrders: Record<string, unknown>[], lifetime: { currency: string; total: string }[]) {
-    const orderFindMany = jest.fn().mockResolvedValueOnce(periodPaidOrders);
+    const queryRaw = jest.fn().mockResolvedValue(toDayRows(periodPaidOrders as Parameters<typeof toDayRows>[0]));
     const orderGroupBy = jest
       .fn()
       .mockResolvedValue(lifetime.map((l) => ({ currency: l.currency, _sum: { grandTotal: l.total } })));
@@ -231,7 +244,7 @@ describe('PlatformService period stats — mixed currencies', () => {
       user: { count: jest.fn().mockResolvedValue(0) },
       subscription: { findMany: jest.fn().mockResolvedValue([]) },
       withRlsBypass: jest.fn(async (work: (tx: unknown) => Promise<unknown>) =>
-        work({ order: { count: jest.fn().mockResolvedValue(0), findMany: orderFindMany, groupBy: orderGroupBy } }),
+        work({ order: { count: jest.fn().mockResolvedValue(0), groupBy: orderGroupBy }, $queryRaw: queryRaw }),
       ),
     } as unknown as PrismaService;
     const settings = { getDefaultCommissionRate: () => Promise.resolve(10) } as unknown as PlatformSettingsService;

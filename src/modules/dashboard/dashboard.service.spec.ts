@@ -3,11 +3,26 @@ import { DashboardService } from './dashboard.service';
 
 const TENANT_ID = 'tenant-1';
 
+function dayOf(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
 function buildService({ periodOrders }: { periodOrders: { createdAt: Date; grandTotal: string }[] }) {
-  const orderFindMany = jest.fn((args: { where: Record<string, unknown>; take?: number }) => {
-    if (args.take === 5) return Promise.resolve([]); // recent orders
-    if ('sessionId' in args.where) return Promise.resolve([]); // order sessions
-    return Promise.resolve(periodOrders);
+  const orderFindMany = jest.fn().mockResolvedValue([]); // recent orders
+  // The sales-by-day query is the one that reads the `orders` table with a revenue column.
+  const queryRaw = jest.fn((query: { strings: string[] }) => {
+    const sql = query.strings.join('?');
+    if (sql.includes('FROM orders') && sql.includes('AS revenue')) {
+      const byDay = new Map<string, { day: string; orders: number; revenue: number }>();
+      for (const o of periodOrders) {
+        const row = byDay.get(dayOf(o.createdAt)) ?? { day: dayOf(o.createdAt), orders: 0, revenue: 0 };
+        row.orders += 1;
+        row.revenue += Number(o.grandTotal);
+        byDay.set(row.day, row);
+      }
+      return Promise.resolve(Array.from(byDay.values()).map((r) => ({ ...r, revenue: String(r.revenue) })));
+    }
+    return Promise.resolve([]);
   });
   const db = {
     product: { count: jest.fn().mockResolvedValue(0) },
@@ -19,10 +34,10 @@ function buildService({ periodOrders }: { periodOrders: { createdAt: Date; grand
     },
     orderItem: { groupBy: jest.fn().mockResolvedValue([]) },
     coupon: { findMany: jest.fn().mockResolvedValue([]) },
-    $queryRaw: jest.fn().mockResolvedValue([]),
+    $queryRaw: queryRaw,
   };
   const service = new DashboardService({ db } as unknown as PrismaService);
-  return { service, db, orderFindMany };
+  return { service, db, orderFindMany, queryRaw };
 }
 
 /**
@@ -31,15 +46,16 @@ function buildService({ periodOrders }: { periodOrders: { createdAt: Date; grand
  */
 describe('DashboardService.getSummary sales figures', () => {
   it('leaves cancelled and refunded orders out of period revenue, top products and coupons', async () => {
-    const { service, db, orderFindMany } = buildService({ periodOrders: [] });
+    const { service, db, queryRaw } = buildService({ periodOrders: [] });
 
     await service.getSummary(TENANT_ID, '7d');
 
     const notASale = { notIn: ['CANCELLED', 'REFUNDED'] };
-    const periodQuery = orderFindMany.mock.calls
-      .map(([args]) => args)
-      .find((args) => 'createdAt' in args.where && !('sessionId' in args.where));
-    expect(periodQuery?.where.status).toEqual(notASale);
+    const salesQuery = queryRaw.mock.calls
+      .map(([query]) => query as { strings: string[]; values: unknown[] })
+      .find((query) => query.strings.join('?').includes('AS revenue'));
+    expect(salesQuery?.strings.join('?')).toContain('NOT IN');
+    expect(salesQuery?.values).toEqual(expect.arrayContaining(notASale.notIn));
     expect(db.orderItem.groupBy).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ order: expect.objectContaining({ status: notASale }) }),

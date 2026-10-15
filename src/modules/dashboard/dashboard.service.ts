@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { DashboardRange } from './dto/dashboard-query.dto';
-import { buildDayBuckets, dayKey, rangeDays, rangeStart } from '../../common/utils/date-range-buckets.util';
+import { buildDayBuckets, rangeDays, rangeStart } from '../../common/utils/date-range-buckets.util';
 
 /**
  * Orders that never turned into a sale (cancelled) or gave the money back
@@ -25,12 +25,12 @@ export class DashboardService {
       totalOrders,
       pendingOrders,
       lifetimePaidOrders,
-      periodOrders,
+      salesByDay,
       recentOrders,
       topItems,
       couponGroups,
       visitStats,
-      periodOrderSessions,
+      convertedSessionRows,
     ] = await Promise.all([
       this.prisma.db.product.count({ where: { tenantId } }),
       this.prisma.db.order.count({ where: { tenantId } }),
@@ -40,10 +40,7 @@ export class DashboardService {
         where: { tenantId, paymentStatus: 'PAID' },
         _sum: { grandTotal: true },
       }),
-      this.prisma.db.order.findMany({
-        where: { tenantId, createdAt: { gte: from }, status: NOT_A_SALE },
-        select: { createdAt: true, grandTotal: true },
-      }),
+      this.getSalesByDay(tenantId, from),
       this.prisma.db.order.findMany({
         // A list the merchant reads, so orders they deleted from the Orders page stay out of
         // it; every total above still counts them (the sale happened).
@@ -71,27 +68,27 @@ export class DashboardService {
       // Every order's own sessionId, independent of the Visit table (which
       // is purged after 60 days) — a converted session still counts within
       // a 90-day dashboard range long after its Visit rows are gone.
-      this.prisma.db.order.findMany({
-        where: { tenantId, createdAt: { gte: from }, sessionId: { not: null } },
-        select: { sessionId: true },
-        distinct: ['sessionId'],
-      }),
+      this.prisma.db.$queryRaw<{ sessions: number }[]>(Prisma.sql`
+        SELECT count(DISTINCT session_id)::int AS sessions
+        FROM orders
+        WHERE tenant_id = ${tenantId}::uuid AND created_at >= ${from} AND session_id IS NOT NULL`),
     ]);
 
     const lifetimeRevenue = Number(lifetimePaidOrders._sum.grandTotal ?? 0);
 
     const revenueBuckets = buildDayBuckets(from, days, () => ({ orders: 0, revenue: 0 }));
-    for (const order of periodOrders) {
-      const bucket = revenueBuckets.get(dayKey(order.createdAt));
+    let periodRevenue = 0;
+    let periodOrderCount = 0;
+    for (const row of salesByDay) {
+      periodRevenue += row.revenue;
+      periodOrderCount += row.orders;
+      const bucket = revenueBuckets.get(row.day);
       if (bucket) {
-        bucket.orders += 1;
-        bucket.revenue += Number(order.grandTotal);
+        bucket.orders += row.orders;
+        bucket.revenue += row.revenue;
       }
     }
     const revenueOverTime = Array.from(revenueBuckets.entries()).map(([date, v]) => ({ date, ...v }));
-
-    const periodRevenue = periodOrders.reduce((sum, o) => sum + Number(o.grandTotal), 0);
-    const periodOrderCount = periodOrders.length;
     const averageOrderValue = periodOrderCount > 0 ? periodRevenue / periodOrderCount : 0;
 
     const topProducts = topItems.map((t) => ({
@@ -130,7 +127,7 @@ export class DashboardService {
     const totalPageviews = visitStats.totalPageviews;
     const uniqueVisitors = visitStats.uniqueVisitors;
 
-    const convertedSessions = periodOrderSessions.length;
+    const convertedSessions = convertedSessionRows[0]?.sessions ?? 0;
     const conversionRate = uniqueVisitors > 0 ? convertedSessions / uniqueVisitors : null;
 
     const topReferrers = visitStats.topReferrers;
@@ -154,6 +151,23 @@ export class DashboardService {
       visitsOverTime,
       topReferrers,
     };
+  }
+
+  /**
+   * Orders per UTC day (and their value), summed in the database — loading
+   * every order in a 90-day range to add them up grows with sales. Cancelled
+   * and refunded orders are left out (see NOT_A_SALE).
+   */
+  private async getSalesByDay(tenantId: string, from: Date) {
+    const rows = await this.prisma.db.$queryRaw<{ day: string; orders: number; revenue: string }[]>(Prisma.sql`
+      SELECT to_char(created_at, 'YYYY-MM-DD') AS day,
+             count(*)::int AS orders,
+             COALESCE(sum(grand_total), 0)::text AS revenue
+      FROM orders
+      WHERE tenant_id = ${tenantId}::uuid AND created_at >= ${from}
+        AND status::text NOT IN (${Prisma.join(NOT_A_SALE.notIn)})
+      GROUP BY 1`);
+    return rows.map((r) => ({ day: r.day, orders: r.orders, revenue: Number(r.revenue) }));
   }
 
   /**

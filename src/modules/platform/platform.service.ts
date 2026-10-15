@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { DashboardRange } from '../dashboard/dto/dashboard-query.dto';
-import { buildDayBuckets, dayKey, rangeDays, rangeStart } from '../../common/utils/date-range-buckets.util';
+import { buildDayBuckets, rangeDays, rangeStart } from '../../common/utils/date-range-buckets.util';
 import { PlatformSettingsService } from '../platform-settings/platform-settings.service';
 
 @Injectable()
@@ -55,10 +56,16 @@ export class PlatformService {
           tx.order.count(),
           tx.order.groupBy({ by: ['currency'], where: { paymentStatus: 'PAID' }, _sum: { grandTotal: true } }),
           tx.order.count({ where: { createdAt: { gte: from } } }),
-          tx.order.findMany({
-            where: { paymentStatus: 'PAID', createdAt: { gte: from } },
-            select: { tenantId: true, currency: true, grandTotal: true, createdAt: true },
-          }),
+          // One row per tenant, currency and UTC day, summed in the database:
+          // the platform sees every tenant's orders, so loading them all grows with total sales.
+          tx.$queryRaw<
+            { tenantId: string; currency: string; day: string; orders: number; amount: string }[]
+          >(Prisma.sql`
+            SELECT tenant_id::text AS "tenantId", currency, to_char(created_at, 'YYYY-MM-DD') AS day,
+                   count(*)::int AS orders, sum(grand_total)::text AS amount
+            FROM orders
+            WHERE payment_status::text = 'PAID' AND created_at >= ${from}
+            GROUP BY 1, 2, 3`),
         ]);
         return { totalOrders, lifetimeByCurrency, periodOrders, periodPaidOrders };
       },
@@ -89,7 +96,7 @@ export class PlatformService {
     for (const row of lifetimeByCurrency) entryFor(row.currency).totalRevenue = Number(row._sum.grandTotal ?? 0);
     for (const order of periodPaidOrders) {
       const entry = entryFor(order.currency);
-      const amount = Number(order.grandTotal);
+      const amount = Number(order.amount);
       const override = tenantById.get(order.tenantId)?.commissionRate;
       const rate = override !== undefined && override !== null ? Number(override) : defaultCommissionRate;
       entry.periodRevenue += amount;
@@ -106,12 +113,12 @@ export class PlatformService {
     const tenantTotals = new Map<string, number>();
     for (const order of periodPaidOrders) {
       if (order.currency !== currency) continue;
-      const bucket = gmvBuckets.get(dayKey(order.createdAt));
+      const bucket = gmvBuckets.get(order.day);
       if (bucket) {
-        bucket.orders += 1;
-        bucket.gmv += Number(order.grandTotal);
+        bucket.orders += order.orders;
+        bucket.gmv += Number(order.amount);
       }
-      tenantTotals.set(order.tenantId, (tenantTotals.get(order.tenantId) ?? 0) + Number(order.grandTotal));
+      tenantTotals.set(order.tenantId, (tenantTotals.get(order.tenantId) ?? 0) + Number(order.amount));
     }
     const gmvOverTime = Array.from(gmvBuckets.entries()).map(([date, v]) => ({ date, ...v }));
 
