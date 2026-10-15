@@ -390,6 +390,8 @@ export class AuthService {
               store_name: tenant.name,
               reset_link: staffPasswordLink(this.config.get<string | null>('app.publicWebUrl') ?? null, rawToken),
             },
+            // The link authenticates this User, so it must not pass through any tenant's SMTP.
+            viaPlatform: true,
           } satisfies EmailJobData,
           EMAIL_JOB_OPTIONS,
         );

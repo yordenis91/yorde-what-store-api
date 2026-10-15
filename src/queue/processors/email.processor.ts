@@ -21,6 +21,12 @@ export interface EmailJobData {
   locale: string;
   to: string;
   variables: Record<string, string>;
+  /**
+   * Send through the platform's SMTP even though the template resolves per tenant. Required for anything
+   * that carries a credential-bearing link for a User account (invites, password resets): a tenant
+   * controls its own SMTP host, so mail routed through it is readable by that tenant's owner.
+   */
+  viaPlatform?: boolean;
 }
 
 @Processor(EMAIL_QUEUE)
@@ -36,7 +42,7 @@ export class EmailProcessor extends WorkerHost {
   }
 
   async process(job: Job<EmailJobData>): Promise<void> {
-    const { templateKey, tenantId, locale, to, variables } = job.data;
+    const { templateKey, tenantId, locale, to, variables, viaPlatform } = job.data;
     if (!to) {
       this.logger.warn(`Email job [${job.name}] has no recipient, skipping`);
       return;
@@ -54,7 +60,7 @@ export class EmailProcessor extends WorkerHost {
       variables,
     );
 
-    const tenantSmtp = platformTemplates ? null : await this.tenants.getDecryptedSmtpConfig(tenantId);
+    const tenantSmtp = platformTemplates || viaPlatform ? null : await this.tenants.getDecryptedSmtpConfig(tenantId);
     // The platform default "from" still applies even when the tenant has a
     // host but no override of its own, so this is fetched whenever either
     // the host or the from-address might need to fall back to it.

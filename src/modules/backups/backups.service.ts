@@ -8,13 +8,12 @@ import {
   GetObjectCommand,
   type _Object,
 } from '@aws-sdk/client-s3';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { assertSafeRestoreTarget, runPgTool } from './pg-tools.util';
 
-const execFileAsync = promisify(execFile);
+export { pointsAtSameDatabase, toPgToolsUrl } from './pg-tools.util';
 
 export interface BackupSummary {
   key: string;
@@ -33,45 +32,6 @@ export function selectStaleKeys(objects: { key: string; lastModified: Date }[], 
     .sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime())
     .slice(retentionCount)
     .map((o) => o.key);
-}
-
-/**
- * `pg_dump`/`pg_restore` speak plain libpq connection URIs and reject any
- * query parameter they don't recognize — including `schema`, `pgbouncer`,
- * `connection_limit` and `statement_cache_size`, all Prisma-only extensions
- * that `DATABASE_URL` in this app always carries (`?schema=public`, and
- * `test/setup-env.ts` adds `connection_limit=1` on top for e2e). Passing the
- * raw `DATABASE_URL` straight to either tool fails every time with "invalid
- * URI query parameter" — found by actually running this against a real
- * database rather than trusting it would work. Dropping those params is
- * safe: pg_dump captures every schema in the database regardless, so
- * `schema=public` was never doing anything for it either way.
- */
-const PRISMA_ONLY_QUERY_PARAMS = ['schema', 'pgbouncer', 'connection_limit', 'statement_cache_size'];
-
-/**
- * True when two connection URLs point at the same database, however they are
- * spelled: extra query params, a different user, host case or an explicit
- * default port must not let a restore through to the live database.
- */
-export function pointsAtSameDatabase(a: string | undefined, b: string | undefined): boolean {
-  if (!a || !b) return false;
-  try {
-    const x = new URL(a);
-    const y = new URL(b);
-    const port = (u: URL) => u.port || '5432';
-    const db = (u: URL) => decodeURIComponent(u.pathname.replace(/^\//, ''));
-    return x.hostname.toLowerCase() === y.hostname.toLowerCase() && port(x) === port(y) && db(x) === db(y);
-  } catch {
-    // Unparseable: can't prove it's different, so treat it as the same.
-    return true;
-  }
-}
-
-export function toPgToolsUrl(databaseUrl: string): string {
-  const url = new URL(databaseUrl);
-  for (const param of PRISMA_ONLY_QUERY_PARAMS) url.searchParams.delete(param);
-  return url.toString();
 }
 
 /**
@@ -162,9 +122,7 @@ export class BackupsService {
       // Custom format (-Fc): pg_dump's own compression, and restorable with
       // pg_restore's selective/parallel options — a plain SQL dump gzipped
       // separately gives up both for no benefit here.
-      await execFileAsync('pg_dump', ['--format=custom', '--file', filePath, toPgToolsUrl(databaseUrl)], {
-        maxBuffer: 1024 * 1024 * 64,
-      });
+      await runPgTool('pg_dump', [], databaseUrl, filePath);
 
       const { size } = await stat(filePath);
       const body = await readFile(filePath);
@@ -198,12 +156,10 @@ export class BackupsService {
    */
   async restore(key: string, targetDatabaseUrl: string): Promise<void> {
     if (!this.s3 || !this.bucket) throw new ServiceUnavailableException('Backups are not configured');
-    if (
-      pointsAtSameDatabase(targetDatabaseUrl, process.env.DATABASE_URL) ||
-      pointsAtSameDatabase(targetDatabaseUrl, this.config.get<string>('backup.databaseUrl'))
-    ) {
-      throw new ServiceUnavailableException('Refusing to restore over the live database — point this at a scratch one');
-    }
+    await assertSafeRestoreTarget(targetDatabaseUrl, [
+      process.env.DATABASE_URL,
+      this.config.get<string>('backup.databaseUrl'),
+    ]);
 
     const dir = await mkdtemp(join(tmpdir(), 'yws-restore-'));
     const filePath = join(dir, 'restore.dump');
@@ -212,11 +168,7 @@ export class BackupsService {
       const bytes = await obj.Body!.transformToByteArray();
       await writeFile(filePath, Buffer.from(bytes));
 
-      await execFileAsync(
-        'pg_restore',
-        ['--clean', '--if-exists', '--no-owner', '--dbname', toPgToolsUrl(targetDatabaseUrl), filePath],
-        { maxBuffer: 1024 * 1024 * 64 },
-      );
+      await runPgTool('pg_restore', ['--clean', '--if-exists', '--no-owner'], targetDatabaseUrl, filePath);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

@@ -54,6 +54,7 @@ export class PaymentsService {
       where: { id: tenantId },
       select: { subdomain: true, customDomain: true },
     });
+    const baseHost = this.platformHost(corsOrigins);
     const allowed = (raw: string) => {
       let url: URL;
       try {
@@ -64,10 +65,21 @@ export class PaymentsService {
       if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
       if (corsOrigins.includes(url.origin)) return true;
       if (tenant.customDomain && url.hostname === tenant.customDomain) return true;
-      return Boolean(tenant.subdomain) && url.hostname.startsWith(`${tenant.subdomain}.`);
+      // `<subdomain>.<platform host>` only. A bare prefix test would accept `shop.evil.com`.
+      return Boolean(tenant.subdomain && baseHost) && url.hostname === `${tenant.subdomain}.${baseHost}`;
     };
     if (!allowed(urls.successUrl) || !allowed(urls.cancelUrl)) {
       throw new BadRequestException('Redirect URL is not allowed for this store');
+    }
+  }
+
+  /** Hostname of the web client — the parent domain store subdomains hang off (`shop.<this>`). */
+  private platformHost(corsOrigins: string[]): string | null {
+    const candidate = this.config.get<string | null>('app.publicWebUrl') ?? corsOrigins[0];
+    try {
+      return candidate ? new URL(candidate).hostname.replace(/^www\./, '') : null;
+    } catch {
+      return null;
     }
   }
 
@@ -106,6 +118,12 @@ export class PaymentsService {
 
     const credentials = await this.tenantsService.getDecryptedCredentials(tenantId, 'STRIPE');
 
+    // Every call opens a new session. Close the previous one so the customer cannot end up
+    // paying both (a duplicate is still refunded by the webhook, but better not to charge it).
+    if (order.stripeCheckoutSessionId) {
+      await this.stripeAdapter.expireSession(order.stripeCheckoutSessionId, credentials).catch(() => undefined);
+    }
+
     const result = await this.stripeAdapter.createCheckout(this.checkoutContext(tenantId, order), credentials, urls);
 
     await this.prisma.db.order.update({
@@ -143,9 +161,27 @@ export class PaymentsService {
           this.logger.warn(`Stripe checkout.session.completed for unknown order ${orderId} ignored`);
           return false;
         }
-        // Redelivery of an event already applied.
-        if (existing.paymentStatus === 'PAID') return false;
         if (session.payment_status !== 'paid') return false;
+
+        // The metadata is only as trustworthy as whoever created the session. A Connect
+        // account can create sessions of its own with any metadata, so an event is accepted
+        // only from the account this tenant is actually set up with (none, for the platform's own).
+        const credentials = await this.tenantsService.getDecryptedCredentials(tenantId, 'STRIPE', tx);
+        if ((event.account ?? undefined) !== (credentials?.connectedAccountId ?? undefined)) {
+          this.logger.error(
+            `Stripe session ${session.id} for order ${orderId} came from account ${event.account ?? 'platform'}, not this store's; ignored`,
+          );
+          return false;
+        }
+
+        if (existing.paymentStatus === 'PAID') {
+          // Same payment delivered again: nothing to do. A different one: the customer paid twice.
+          const duplicate = Boolean(
+            paymentIntentId && existing.stripePaymentIntentId && paymentIntentId !== existing.stripePaymentIntentId,
+          );
+          if (duplicate) this.logger.error(`Order ${orderId} paid twice; refunding ${paymentIntentId}`);
+          return duplicate;
+        }
         if (TERMINAL_ORDER_STATUSES.includes(existing.status)) {
           this.logger.error(
             `Stripe session ${session.id} paid for order ${orderId} but the order is ${existing.status}`,
@@ -157,17 +193,26 @@ export class PaymentsService {
           session.amount_total !== toMinorUnits(Number(existing.grandTotal), existing.currency) ||
           session.currency?.toUpperCase() !== existing.currency.toUpperCase()
         ) {
+          // Typically the order was edited after the session was opened. The money is real but
+          // does not match what is owed: return it and let the customer pay the current total.
           this.logger.error(
-            `Stripe session ${session.id} amount ${session.amount_total} ${session.currency} does not match order ${orderId} total ${existing.grandTotal} ${existing.currency}; not marking PAID`,
+            `Stripe session ${session.id} amount ${session.amount_total} ${session.currency} does not match order ${orderId} total ${existing.grandTotal} ${existing.currency}; refunding`,
           );
-          return false;
+          return true;
         }
 
-        const order = await tx.order.update({
-          where: { id: orderId },
+        // Conditional so two webhooks racing for the same order cannot both confirm it.
+        const { count } = await tx.order.updateMany({
+          where: { id: orderId, paymentStatus: { not: 'PAID' }, status: { notIn: TERMINAL_ORDER_STATUSES as any } },
           data: { paymentStatus: 'PAID', status: 'CONFIRMED', stripePaymentIntentId: paymentIntentId },
         });
-        await this.invoiceQueue.add('generate-invoice', { tenantId, orderId: order.id });
+        if (count === 0) {
+          // Lost a race. If the winner is this same payment (a concurrent redelivery) there is nothing
+          // to undo; if it is a different one, this payment is the duplicate.
+          const winner = await tx.order.findUnique({ where: { id: orderId } });
+          return Boolean(paymentIntentId && winner?.stripePaymentIntentId !== paymentIntentId);
+        }
+        await this.invoiceQueue.add('generate-invoice', { tenantId, orderId });
         return false;
       });
       if (refundNeeded && paymentIntentId) {
@@ -175,9 +220,7 @@ export class PaymentsService {
           // Outside a request there is no tenant-scoped client to read the credentials with.
           await this.prisma.withTenant(tenantId, (tx) => this.refundPaymentIntent(tenantId, paymentIntentId, tx));
         } catch {
-          this.logger.error(
-            `Automatic refund of ${paymentIntentId} for cancelled order ${orderId} failed; refund manually`,
-          );
+          this.logger.error(`Automatic refund of ${paymentIntentId} for order ${orderId} failed; refund manually`);
         }
       }
     }
@@ -262,8 +305,15 @@ export class PaymentsService {
           this.logger.warn(`MercadoPago payment ${dataId} approval for unknown order ${orderId} ignored`);
           return false;
         }
-        // payment.updated/created redeliveries must not re-confirm or re-invoice.
-        if (existing.paymentStatus === 'PAID') return false;
+        if (existing.paymentStatus === 'PAID') {
+          // payment.updated/created redeliveries of the same payment must not re-confirm or re-invoice;
+          // a different payment id means the customer paid twice.
+          const duplicate = Boolean(
+            existing.mercadoPagoPaymentId && existing.mercadoPagoPaymentId !== String(payment.id),
+          );
+          if (duplicate) this.logger.error(`Order ${orderId} paid twice; refunding MercadoPago payment ${payment.id}`);
+          return duplicate;
+        }
         if (TERMINAL_ORDER_STATUSES.includes(existing.status)) {
           this.logger.error(
             `MercadoPago payment ${dataId} approved for order ${orderId} but the order is ${existing.status}`,
@@ -275,16 +325,20 @@ export class PaymentsService {
           payment.currency_id?.toUpperCase() !== existing.currency.toUpperCase()
         ) {
           this.logger.error(
-            `MercadoPago payment ${dataId} amount ${payment.transaction_amount} ${payment.currency_id} does not match order ${orderId} total ${existing.grandTotal} ${existing.currency}; not marking PAID`,
+            `MercadoPago payment ${dataId} amount ${payment.transaction_amount} ${payment.currency_id} does not match order ${orderId} total ${existing.grandTotal} ${existing.currency}; refunding`,
           );
-          return false;
+          return true;
         }
 
-        const order = await tx.order.update({
-          where: { id: orderId },
+        const { count } = await tx.order.updateMany({
+          where: { id: orderId, paymentStatus: { not: 'PAID' }, status: { notIn: TERMINAL_ORDER_STATUSES as any } },
           data: { paymentStatus: 'PAID', status: 'CONFIRMED', mercadoPagoPaymentId: String(payment.id) },
         });
-        await this.invoiceQueue.add('generate-invoice', { tenantId, orderId: order.id });
+        if (count === 0) {
+          const winner = await tx.order.findUnique({ where: { id: orderId } });
+          return winner?.mercadoPagoPaymentId !== String(payment.id);
+        }
+        await this.invoiceQueue.add('generate-invoice', { tenantId, orderId });
         return false;
       });
       if (refundNeeded) {
@@ -292,7 +346,7 @@ export class PaymentsService {
           await this.mercadoPagoAdapter.refund(String(payment.id));
         } catch {
           this.logger.error(
-            `Automatic refund of MercadoPago payment ${dataId} for cancelled order ${orderId} failed; refund manually`,
+            `Automatic refund of MercadoPago payment ${dataId} for order ${orderId} failed; refund manually`,
           );
         }
       }

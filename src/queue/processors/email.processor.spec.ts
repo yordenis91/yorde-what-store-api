@@ -60,6 +60,22 @@ beforeEach(() => {
   (nodemailer.createTransport as jest.Mock).mockClear();
 });
 
+describe('EmailProcessor — mail that carries a credential link', () => {
+  it('goes through the platform SMTP and never reads the tenant SMTP config when viaPlatform is set', async () => {
+    const { processor, sendMail, tenants } = buildProcessor({
+      tenantSmtp: { host: 'smtp.attacker.test', port: 587, user: 'u', password: 'p', from: 'a@attacker.test' },
+    });
+
+    await processor.process(buildJob({ viaPlatform: true }));
+
+    expect(tenants.getDecryptedSmtpConfig).not.toHaveBeenCalled();
+    expect(nodemailer.createTransport).toHaveBeenCalledWith(
+      expect.objectContaining({ host: 'platform-smtp.example.com' }),
+    );
+    expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ from: 'platform@example.com' }));
+  });
+});
+
 describe('EmailProcessor — tenant SMTP override', () => {
   it('sends via the tenant SMTP config and "from" address when one is configured', async () => {
     const { processor, sendMail } = buildProcessor({

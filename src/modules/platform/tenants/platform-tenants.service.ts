@@ -409,6 +409,7 @@ export class PlatformTenantsService {
           store_name: tenant.name,
           reset_link: staffPasswordLink(this.config.get<string | null>('app.publicWebUrl') ?? null, rawToken),
         },
+        viaPlatform: true,
       } satisfies EmailJobData,
       EMAIL_JOB_OPTIONS,
     );

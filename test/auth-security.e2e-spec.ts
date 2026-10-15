@@ -3,6 +3,8 @@ import { JwtService } from '@nestjs/jwt';
 import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 import { authenticator } from 'otplib';
 import request from 'supertest';
+import type { Queue } from 'bullmq';
+import { UsersService } from '../src/modules/users/users.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { bootstrapTestApp } from './utils/bootstrap-app';
 import { seedLoginUser, seedOrder, seedTenant } from './utils/fixtures';
@@ -192,6 +194,61 @@ describe('Auth security fixes (e2e)', () => {
         .send({ status: 'PROCESSING' })
         .expect(200);
       expect(staff.id).toBeDefined();
+    });
+  });
+
+  describe('staff invitations', () => {
+    it("cannot be used to get a set-password link for someone else's account", async () => {
+      const emailAdd = jest.spyOn(app.get(UsersService)['emailQueue'] as Queue, 'add').mockResolvedValue({} as never);
+      const { tenant: attackerStore, owner: attacker } = await seedTenant(prisma, { slug: 'attacker' });
+      const victim = await seedLoginUser(prisma, { email: 'victim@test.com', password: PASSWORD });
+      const attackerToken = jwt.sign({
+        sub: attacker.id,
+        email: attacker.email,
+        globalRole: 'USER',
+        tenantId: attackerStore.id,
+        tenantRole: 'OWNER',
+      });
+
+      await http()
+        .post('/api/v1/users')
+        .set('Authorization', bearer(attackerToken))
+        .set('X-Tenant-ID', attackerStore.id)
+        .send({ email: victim.email, name: 'Victim' })
+        .expect(201);
+
+      // No token for the victim's account exists, so there is nothing to capture...
+      expect(await prisma.passwordResetToken.count({ where: { userId: victim.id } })).toBe(0);
+      // ...and whatever was mailed goes out through the platform, not the attacker's SMTP.
+      expect(emailAdd).toHaveBeenCalledTimes(1);
+      expect(emailAdd.mock.calls[0][1]).toMatchObject({ viaPlatform: true });
+      expect(JSON.stringify(emailAdd.mock.calls[0][1])).not.toContain('token=');
+      emailAdd.mockRestore();
+    });
+
+    it('still gives a brand-new invitee a set-password link', async () => {
+      const emailAdd = jest.spyOn(app.get(UsersService)['emailQueue'] as Queue, 'add').mockResolvedValue({} as never);
+      const { tenant, owner } = await seedTenant(prisma, { slug: 'inviter' });
+      const token = jwt.sign({
+        sub: owner.id,
+        email: owner.email,
+        globalRole: 'USER',
+        tenantId: tenant.id,
+        tenantRole: 'OWNER',
+      });
+
+      await http()
+        .post('/api/v1/users')
+        .set('Authorization', bearer(token))
+        .set('X-Tenant-ID', tenant.id)
+        .send({ email: 'newbie@test.com', name: 'Newbie' })
+        .expect(201);
+
+      const created = await prisma.user.findUniqueOrThrow({ where: { email: 'newbie@test.com' } });
+      expect(await prisma.passwordResetToken.count({ where: { userId: created.id } })).toBe(1);
+      expect(emailAdd.mock.calls[0][1]).toMatchObject({ viaPlatform: true });
+      expect(JSON.stringify(emailAdd.mock.calls[0][1])).toContain('token=');
+      emailAdd.mockRestore();
     });
   });
 });
