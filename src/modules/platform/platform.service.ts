@@ -53,7 +53,7 @@ export class PlatformService {
       async (tx) => {
         const [totalOrders, allPaidOrders, periodOrders, periodPaidOrders] = await Promise.all([
           tx.order.count(),
-          tx.order.findMany({ where: { paymentStatus: 'PAID' }, select: { grandTotal: true } }),
+          tx.order.aggregate({ where: { paymentStatus: 'PAID' }, _sum: { grandTotal: true } }),
           tx.order.count({ where: { createdAt: { gte: from } } }),
           tx.order.findMany({
             where: { paymentStatus: 'PAID', createdAt: { gte: from } },
@@ -62,7 +62,7 @@ export class PlatformService {
         ]);
         return {
           totalOrders,
-          totalRevenue: allPaidOrders.reduce((sum, o) => sum + Number(o.grandTotal), 0),
+          totalRevenue: Number(allPaidOrders._sum.grandTotal ?? 0),
           periodOrders,
           periodPaidOrders,
         };

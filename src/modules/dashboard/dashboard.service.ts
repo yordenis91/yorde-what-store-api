@@ -34,9 +34,10 @@ export class DashboardService {
       this.prisma.db.product.count({ where: { tenantId } }),
       this.prisma.db.order.count({ where: { tenantId } }),
       this.prisma.db.order.count({ where: { tenantId, status: 'PENDING' } }),
-      this.prisma.db.order.findMany({
+      // Summed in the database: loading every paid order ever placed just to add them up grows without bound.
+      this.prisma.db.order.aggregate({
         where: { tenantId, paymentStatus: 'PAID' },
-        select: { grandTotal: true },
+        _sum: { grandTotal: true },
       }),
       this.prisma.db.order.findMany({
         where: { tenantId, createdAt: { gte: from }, status: NOT_A_SALE },
@@ -79,7 +80,7 @@ export class DashboardService {
       }),
     ]);
 
-    const lifetimeRevenue = lifetimePaidOrders.reduce((sum, o) => sum + Number(o.grandTotal), 0);
+    const lifetimeRevenue = Number(lifetimePaidOrders._sum.grandTotal ?? 0);
 
     const revenueBuckets = buildDayBuckets(from, days, () => ({ orders: 0, revenue: 0 }));
     for (const order of periodOrders) {

@@ -1,4 +1,5 @@
 import { Controller, Get, Header, Query, Req, Res } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { Public } from '../../common/decorators';
@@ -21,18 +22,35 @@ import { PreviewService } from './preview.service';
 @Public()
 @Controller('storefront/preview')
 export class PreviewController {
-  constructor(private readonly previewService: PreviewService) {}
+  constructor(
+    private readonly previewService: PreviewService,
+    private readonly config: ConfigService,
+  ) {}
+
+  /**
+   * The origin that goes into og:url / canonical / image links. This response
+   * is cached publicly, and X-Forwarded-Host is client-controlled, so taking
+   * it at face value lets anyone poison the cached preview of a store with
+   * their own domain. Only hosts we already trust are echoed back.
+   */
+  private trustedOrigin(req: TenantRequest): string {
+    const corsOrigins = this.config.get<string[]>('app.corsOrigins') ?? [];
+    const configured = (this.config.get<string | null>('app.publicWebUrl') ?? corsOrigins[0] ?? '').replace(/\/+$/, '');
+    const proto = (req.headers['x-forwarded-proto'] as string)?.split(',')[0] ?? req.protocol;
+    const host = ((req.headers['x-forwarded-host'] as string)?.split(',')[0] ?? req.headers.host ?? '').trim();
+    const candidate = `${proto}://${host}`;
+    if (corsOrigins.includes(candidate) || candidate === configured) return candidate;
+    return configured || candidate;
+  }
 
   @Get()
   @Header('Cache-Control', 'public, max-age=300')
+  @Header('Vary', 'X-Forwarded-Host, X-Forwarded-Proto')
   async render(@Query('path') path: string, @Req() req: TenantRequest, @Res() res: Response) {
-    const proto = (req.headers['x-forwarded-proto'] as string)?.split(',')[0] ?? req.protocol;
-    const host = (req.headers['x-forwarded-host'] as string)?.split(',')[0] ?? req.headers.host ?? '';
-
     const html = await this.previewService.render({
       path: typeof path === 'string' && path.startsWith('/') ? path : '/',
       hostSlug: req.tenantSlug,
-      origin: `${proto}://${host}`,
+      origin: this.trustedOrigin(req),
     });
 
     // Sent directly so the global TransformInterceptor doesn't wrap it in JSON.

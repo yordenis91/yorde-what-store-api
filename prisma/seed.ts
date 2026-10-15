@@ -1,6 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
-import { SEED_TEMPLATES, TEMPLATE_KEYS } from '../src/modules/email-templates/default-templates';
+import { LEGACY_STAFF_INVITE_BODIES, SEED_TEMPLATES, TEMPLATE_KEYS } from '../src/modules/email-templates/default-templates';
 
 const prisma = new PrismaClient();
 
@@ -163,6 +163,9 @@ async function main() {
         if (!existing) {
           await tx.emailTemplate.create({ data: { tenantId: null, key, locale, subject, body } });
           console.log(`Created default email template: ${key} (${locale})`);
+        } else if (key === 'staff-invite' && existing.body === LEGACY_STAFF_INVITE_BODIES[locale]) {
+          await tx.emailTemplate.update({ where: { id: existing.id }, data: { subject, body } });
+          console.log(`Updated default email template to the invite-link version: ${key} (${locale})`);
         }
       });
     }

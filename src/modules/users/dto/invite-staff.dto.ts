@@ -8,9 +8,11 @@ export class InviteStaffDto {
   @MinLength(2)
   name: string;
 
+  /** Optional and never emailed: the invitee sets their own password through the emailed link. Omit it to have one generated. */
+  @IsOptional()
   @IsString()
   @MinLength(8)
-  temporaryPassword: string;
+  temporaryPassword?: string;
 
   @IsOptional()
   @IsArray()

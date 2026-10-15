@@ -11,11 +11,11 @@ export const SEED_TEMPLATES: Record<EmailTemplateKey, Record<'en' | 'es', EmailT
   'staff-invite': {
     en: {
       subject: "You've been invited to {store_name}",
-      body: 'Hi {name},\n\n{store_name} invited you to help manage their store.\n\nTemporary password: {temporary_password}\n\nLog in and change it as soon as you can.',
+      body: 'Hi {name},\n\n{store_name} invited you to help manage their store.\n\nSet your password here: {reset_link}\n\nThe link works once and expires in 72 hours.',
     },
     es: {
       subject: 'Te invitaron a {store_name}',
-      body: 'Hola {name},\n\n{store_name} te invitó a ayudar a administrar su tienda.\n\nContraseña temporal: {temporary_password}\n\nInicia sesión y cámbiala lo antes posible.',
+      body: 'Hola {name},\n\n{store_name} te invitó a ayudar a administrar su tienda.\n\nCrea tu contraseña aquí: {reset_link}\n\nEl enlace funciona una sola vez y vence en 72 horas.',
     },
   },
   'order-confirmation': {
@@ -98,4 +98,10 @@ export const PLATFORM_EMAIL_TEMPLATES: Record<PlatformEmailKey, Record<'en' | 'e
       body: 'Hola {name},\n\nEl plan {plan_name} de {store_name} no se renovó, así que la tienda pasó al plan Gratis. Tus productos, pedidos y clientes siguen ahí, pero los canales de cobro y límites fuera del plan Gratis quedan en pausa.\n\nPuedes mejorar tu plan cuando quieras:\n{billing_link}',
     },
   },
+};
+
+/** Bodies the seed shipped before invites switched to a link — a stored default row still holding one is replaced, a customised one is left alone. */
+export const LEGACY_STAFF_INVITE_BODIES: Record<'en' | 'es', string> = {
+  en: 'Hi {name},\n\n{store_name} invited you to help manage their store.\n\nTemporary password: {temporary_password}\n\nLog in and change it as soon as you can.',
+  es: 'Hola {name},\n\n{store_name} te invitó a ayudar a administrar su tienda.\n\nContraseña temporal: {temporary_password}\n\nInicia sesión y cámbiala lo antes posible.',
 };

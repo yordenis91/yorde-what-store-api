@@ -37,7 +37,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
    * admin user. Refuse to serve production traffic that way unless the
    * operator explicitly opts out.
    */
-  private async assertRestrictedDatabaseRole() {
+  async assertRestrictedDatabaseRole() {
     const rows = await this.$queryRaw<{ rolsuper: boolean; rolbypassrls: boolean; rolname: string }[]>`
       SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`;
     const role = rows[0];

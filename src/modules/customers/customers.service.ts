@@ -1,7 +1,10 @@
+import { rm } from 'node:fs/promises';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PaginatedResult } from '../../common/dto/pagination.dto';
+import { getInvoicePath } from '../../queue/processors/invoice-storage.util';
+import { deleteUploadedFile } from '../uploads/uploads.util';
 import { CustomerQueryDto, CustomerSegment } from './dto';
 
 const ORDER_LIST_SELECT = {
@@ -199,6 +202,10 @@ export class CustomersService {
       where: { id: customerId },
       data: { name: 'Deleted customer', email: null, phone: null, passwordHash: null },
     });
+    const orders = await this.prisma.db.order.findMany({
+      where: { tenantId, customerId },
+      select: { id: true, paymentProofUrl: true },
+    });
     await this.prisma.db.order.updateMany({
       where: { tenantId, customerId },
       data: {
@@ -206,8 +213,18 @@ export class CustomersService {
         customerEmail: null,
         customerPhone: null,
         shippingAddress: Prisma.JsonNull,
+        // Free text built from the customer's name/address, and the payment
+        // screenshot / reference they submitted.
+        fulfillmentMessage: null,
+        paymentProofUrl: null,
+        paymentReference: null,
       },
     });
+    // Files on disk carry the same PII: the proof image and the rendered invoice PDF.
+    for (const order of orders) {
+      await deleteUploadedFile(order.paymentProofUrl, tenantId);
+      await rm(getInvoicePath(tenantId, order.id), { force: true }).catch(() => undefined);
+    }
     await this.prisma.db.customerRefreshToken.updateMany({
       where: { customerId, revokedAt: null },
       data: { revokedAt: new Date() },

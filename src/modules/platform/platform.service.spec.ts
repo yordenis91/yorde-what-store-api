@@ -26,6 +26,7 @@ function buildDouble(options: {
         order: {
           count: jest.fn().mockResolvedValue(0),
           findMany: jest.fn().mockResolvedValue([]),
+          aggregate: jest.fn().mockResolvedValue({ _sum: { grandTotal: null } }),
         },
       }),
     ),
@@ -138,8 +139,8 @@ describe('PlatformService period stats — commissions and GMV', () => {
     const orderCount = jest.fn().mockResolvedValueOnce(0).mockResolvedValueOnce(0);
     const orderFindMany = jest
       .fn()
-      .mockResolvedValueOnce([]) // allPaidOrders (lifetime totalRevenue) — irrelevant here
       .mockResolvedValueOnce(options.periodPaidOrders);
+    const orderAggregate = jest.fn().mockResolvedValue({ _sum: { grandTotal: null } }); // lifetime totalRevenue — irrelevant here
 
     const tenantFindMany = jest.fn().mockResolvedValue(options.tenants ?? []);
 
@@ -148,7 +149,7 @@ describe('PlatformService period stats — commissions and GMV', () => {
       user: { count: jest.fn().mockResolvedValue(0) },
       subscription: { findMany: jest.fn().mockResolvedValue([]) },
       withRlsBypass: jest.fn(async (work: (tx: unknown) => Promise<unknown>) =>
-        work({ order: { count: orderCount, findMany: orderFindMany } }),
+        work({ order: { count: orderCount, findMany: orderFindMany, aggregate: orderAggregate } }),
       ),
     } as unknown as PrismaService;
 

@@ -1,6 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
-import { BackupsService, selectStaleKeys, toPgToolsUrl } from './backups.service';
+import { BackupsService, pointsAtSameDatabase, selectStaleKeys, toPgToolsUrl } from './backups.service';
 
 describe('toPgToolsUrl', () => {
   it("strips Prisma's ?schema= param, which pg_dump/pg_restore reject outright", () => {
@@ -108,3 +108,21 @@ describe('BackupsService.isConfigured', () => {
 // Scheduling (previously an in-process @nestjs/schedule CronJob tested here)
 // now lives in BackupsModule as a BullMQ repeatable job — see
 // backups.module.spec.ts. BackupsService itself no longer schedules anything.
+
+describe('pointsAtSameDatabase', () => {
+  const live = 'postgresql://app:pw@db.internal:5432/store?schema=public';
+
+  it('matches the same database however the URL is spelled', () => {
+    expect(pointsAtSameDatabase('postgresql://other:x@DB.internal/store', live)).toBe(true);
+    expect(pointsAtSameDatabase('postgresql://app:pw@db.internal:5432/store?sslmode=require', live)).toBe(true);
+  });
+
+  it('distinguishes a different database or host', () => {
+    expect(pointsAtSameDatabase('postgresql://app:pw@db.internal:5432/scratch', live)).toBe(false);
+    expect(pointsAtSameDatabase('postgresql://app:pw@scratch-host:5432/store', live)).toBe(false);
+  });
+
+  it('treats an unparseable URL as the same, to fail closed', () => {
+    expect(pointsAtSameDatabase('not a url', live)).toBe(true);
+  });
+});

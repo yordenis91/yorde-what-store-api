@@ -18,13 +18,14 @@ export function hashResetToken(token: string): string {
 export async function issuePasswordResetToken(
   prisma: PrismaService | ReturnType<typeof getScopedClient>,
   userId: string,
+  ttlMs: number = PASSWORD_RESET_TOKEN_TTL_MS,
 ): Promise<string> {
   const rawToken = randomBytes(32).toString('hex');
   await prisma.passwordResetToken.create({
     data: {
       userId,
       tokenHash: hashResetToken(rawToken),
-      expiresAt: new Date(Date.now() + PASSWORD_RESET_TOKEN_TTL_MS),
+      expiresAt: new Date(Date.now() + ttlMs),
     },
   });
   return rawToken;
