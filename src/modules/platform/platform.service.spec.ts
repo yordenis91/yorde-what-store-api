@@ -137,9 +137,7 @@ describe('PlatformService period stats — commissions and GMV', () => {
     defaultCommissionRate?: number;
   }) {
     const orderCount = jest.fn().mockResolvedValueOnce(0).mockResolvedValueOnce(0);
-    const orderFindMany = jest
-      .fn()
-      .mockResolvedValueOnce(options.periodPaidOrders);
+    const orderFindMany = jest.fn().mockResolvedValueOnce(options.periodPaidOrders);
     const orderAggregate = jest.fn().mockResolvedValue({ _sum: { grandTotal: null } }); // lifetime totalRevenue — irrelevant here
 
     const tenantFindMany = jest.fn().mockResolvedValue(options.tenants ?? []);

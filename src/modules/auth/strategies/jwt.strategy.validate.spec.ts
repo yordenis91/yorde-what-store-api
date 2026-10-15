@@ -4,11 +4,11 @@ import { JwtStrategy } from './jwt.strategy';
 function build(options: { membership?: { role: string } | null; user?: Record<string, unknown> | null }) {
   const prisma = {
     user: {
-      findUnique: jest.fn().mockResolvedValue(
-        options.user === undefined
-          ? { id: 'u1', email: 'a@b.c', globalRole: 'USER', isActive: true }
-          : options.user,
-      ),
+      findUnique: jest
+        .fn()
+        .mockResolvedValue(
+          options.user === undefined ? { id: 'u1', email: 'a@b.c', globalRole: 'USER', isActive: true } : options.user,
+        ),
     },
     tenantMember: { findFirst: jest.fn().mockResolvedValue(options.membership ?? null) },
   };

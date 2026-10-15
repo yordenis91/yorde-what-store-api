@@ -1,7 +1,11 @@
 import { StaleOrdersProcessor } from './stale-orders.processor';
 import { PrismaService } from '../../prisma/prisma.service';
 
-function buildProcessor(options: { stale?: { id: string; tenantId: string }[]; claimed?: number; tracksInventory?: boolean }) {
+function buildProcessor(options: {
+  stale?: { id: string; tenantId: string }[];
+  claimed?: number;
+  tracksInventory?: boolean;
+}) {
   const updateMany = jest.fn().mockResolvedValue({ count: options.claimed ?? 1 });
   const findUniqueOrThrow = jest.fn().mockResolvedValue({
     id: 'o1',
@@ -26,7 +30,14 @@ function buildProcessor(options: { stale?: { id: string; tenantId: string }[]; c
     withRlsBypass: jest.fn((work: (t: unknown) => unknown) => work({ order: { findMany } })),
     withTenant: jest.fn((_id: string, work: (t: unknown) => unknown) => work(tx)),
   } as unknown as PrismaService;
-  return { processor: new StaleOrdersProcessor(prisma), findMany, updateMany, productUpdateMany, variantUpdateMany, couponUpdateMany };
+  return {
+    processor: new StaleOrdersProcessor(prisma),
+    findMany,
+    updateMany,
+    productUpdateMany,
+    variantUpdateMany,
+    couponUpdateMany,
+  };
 }
 
 describe('StaleOrdersProcessor', () => {

@@ -51,7 +51,10 @@ export class StaleOrdersProcessor extends WorkerHost {
           if (count === 0) return 0;
 
           const order = await tx.order.findUniqueOrThrow({ where: { id }, include: { items: true } });
-          const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { tracksInventory: true } });
+          const tenant = await tx.tenant.findUniqueOrThrow({
+            where: { id: tenantId },
+            select: { tracksInventory: true },
+          });
           if (tenant.tracksInventory) {
             for (const item of order.items) {
               if (item.variantId) {

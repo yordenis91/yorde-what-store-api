@@ -106,11 +106,7 @@ export class PaymentsService {
 
     const credentials = await this.tenantsService.getDecryptedCredentials(tenantId, 'STRIPE');
 
-    const result = await this.stripeAdapter.createCheckout(
-      this.checkoutContext(tenantId, order),
-      credentials,
-      urls,
-    );
+    const result = await this.stripeAdapter.createCheckout(this.checkoutContext(tenantId, order), credentials, urls);
 
     await this.prisma.db.order.update({
       where: { id: order.id },
@@ -178,7 +174,9 @@ export class PaymentsService {
         try {
           await this.refundPaymentIntent(tenantId, paymentIntentId);
         } catch {
-          this.logger.error(`Automatic refund of ${paymentIntentId} for cancelled order ${orderId} failed; refund manually`);
+          this.logger.error(
+            `Automatic refund of ${paymentIntentId} for cancelled order ${orderId} failed; refund manually`,
+          );
         }
       }
     }
@@ -211,11 +209,7 @@ export class PaymentsService {
     this.assertPayable(order);
     await this.assertRedirectUrlsAllowed(tenantId, urls);
 
-    const result = await this.mercadoPagoAdapter.createCheckout(
-      this.checkoutContext(tenantId, order),
-      null,
-      urls,
-    );
+    const result = await this.mercadoPagoAdapter.createCheckout(this.checkoutContext(tenantId, order), null, urls);
 
     await this.prisma.db.order.update({
       where: { id: order.id },
@@ -266,7 +260,9 @@ export class PaymentsService {
         // payment.updated/created redeliveries must not re-confirm or re-invoice.
         if (existing.paymentStatus === 'PAID') return false;
         if (TERMINAL_ORDER_STATUSES.includes(existing.status)) {
-          this.logger.error(`MercadoPago payment ${dataId} approved for order ${orderId} but the order is ${existing.status}`);
+          this.logger.error(
+            `MercadoPago payment ${dataId} approved for order ${orderId} but the order is ${existing.status}`,
+          );
           return existing.status === 'CANCELLED';
         }
         if (
@@ -290,7 +286,9 @@ export class PaymentsService {
         try {
           await this.mercadoPagoAdapter.refund(String(payment.id));
         } catch {
-          this.logger.error(`Automatic refund of MercadoPago payment ${dataId} for cancelled order ${orderId} failed; refund manually`);
+          this.logger.error(
+            `Automatic refund of MercadoPago payment ${dataId} for cancelled order ${orderId} failed; refund manually`,
+          );
         }
       }
     }

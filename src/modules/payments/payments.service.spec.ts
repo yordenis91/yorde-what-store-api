@@ -19,14 +19,20 @@ function buildService(
 ) {
   const update = jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'order-1', ...data }));
   const findFirst = jest.fn().mockResolvedValue(overrides.order ?? null);
-  const existingOrder = 'existingOrder' in overrides ? overrides.existingOrder : { id: 'order-1', status: 'PENDING', paymentStatus: 'PENDING', currency: 'USD', grandTotal: 10 };
+  const existingOrder =
+    'existingOrder' in overrides
+      ? overrides.existingOrder
+      : { id: 'order-1', status: 'PENDING', paymentStatus: 'PENDING', currency: 'USD', grandTotal: 10 };
   const findUnique = jest.fn().mockResolvedValue(existingOrder);
   const withTenant = jest
     .fn()
     .mockImplementation((_tenantId: string, work: (tx: unknown) => unknown) => work({ order: { update, findUnique } }));
 
   const tenantFindUniqueOrThrow = jest.fn().mockResolvedValue({ subdomain: null, customDomain: null });
-  const prisma = { db: { order: { findFirst, update }, tenant: { findUniqueOrThrow: tenantFindUniqueOrThrow } }, withTenant } as unknown as PrismaService;
+  const prisma = {
+    db: { order: { findFirst, update }, tenant: { findUniqueOrThrow: tenantFindUniqueOrThrow } },
+    withTenant,
+  } as unknown as PrismaService;
   const tenantsService = {
     getDecryptedCredentials: jest.fn().mockResolvedValue(null),
   } as unknown as TenantsService;
@@ -44,7 +50,14 @@ function buildService(
   } as unknown as MercadoPagoAdapter;
   const invoiceQueue = { add: jest.fn() };
 
-  const service = new PaymentsService(prisma, tenantsService, stripeAdapter, mercadoPagoAdapter, invoiceQueue as any, { get: jest.fn().mockReturnValue(['https://shop.example']) } as any);
+  const service = new PaymentsService(
+    prisma,
+    tenantsService,
+    stripeAdapter,
+    mercadoPagoAdapter,
+    invoiceQueue as any,
+    { get: jest.fn().mockReturnValue(['https://shop.example']) } as any,
+  );
   return {
     service,
     update,
@@ -62,7 +75,10 @@ describe('PaymentsService.createMercadoPagoCheckout', () => {
   it('rejects an order not configured for card payment', async () => {
     const { service } = buildService({ order: { id: 'order-1', fulfillmentMethod: 'WHATSAPP', items: [] } });
     await expect(
-      service.createMercadoPagoCheckout(TENANT_ID, 'order-1', { successUrl: 'https://shop.example/s', cancelUrl: 'https://shop.example/c' }),
+      service.createMercadoPagoCheckout(TENANT_ID, 'order-1', {
+        successUrl: 'https://shop.example/s',
+        cancelUrl: 'https://shop.example/c',
+      }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -73,7 +89,10 @@ describe('PaymentsService.createMercadoPagoCheckout', () => {
       mercadoPagoAdapter: { createCheckout },
     });
 
-    const result = await service.createMercadoPagoCheckout(TENANT_ID, 'order-1', { successUrl: 'https://shop.example/s', cancelUrl: 'https://shop.example/c' });
+    const result = await service.createMercadoPagoCheckout(TENANT_ID, 'order-1', {
+      successUrl: 'https://shop.example/s',
+      cancelUrl: 'https://shop.example/c',
+    });
 
     expect(result).toEqual({ checkoutUrl: 'https://mp/pay', providerReference: 'pref-1' });
     expect(update).toHaveBeenCalledWith({ where: { id: 'order-1' }, data: { mercadoPagoPreferenceId: 'pref-1' } });

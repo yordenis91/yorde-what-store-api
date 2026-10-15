@@ -1,15 +1,43 @@
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
-import { LEGACY_STAFF_INVITE_BODIES, SEED_TEMPLATES, TEMPLATE_KEYS } from '../src/modules/email-templates/default-templates';
+import {
+  LEGACY_STAFF_INVITE_BODIES,
+  SEED_TEMPLATES,
+  TEMPLATE_KEYS,
+} from '../src/modules/email-templates/default-templates';
 
 const prisma = new PrismaClient();
 
 async function main() {
   const allChannels = ['WHATSAPP', 'TELEGRAM', 'STRIPE', 'MERCADOPAGO', 'ZELLE'] as const;
   const plans = [
-    { name: 'Free', price: 0, duration: 'LIFETIME' as const, maxStores: 1, maxProducts: 20, fulfillmentMethods: ['WHATSAPP'], features: ['1 store', '20 products', 'WhatsApp checkout'] },
-    { name: 'Pro', price: 19, duration: 'MONTHLY' as const, maxStores: 3, maxProducts: 500, fulfillmentMethods: [...allChannels], features: ['3 stores', '500 products', 'Telegram checkout', 'Stripe, MercadoPago & Zelle payments'] },
-    { name: 'Business', price: 49, duration: 'MONTHLY' as const, maxStores: -1, maxProducts: -1, fulfillmentMethods: [...allChannels], features: ['Unlimited stores', 'Unlimited products', 'Every checkout channel', 'Priority support'] },
+    {
+      name: 'Free',
+      price: 0,
+      duration: 'LIFETIME' as const,
+      maxStores: 1,
+      maxProducts: 20,
+      fulfillmentMethods: ['WHATSAPP'],
+      features: ['1 store', '20 products', 'WhatsApp checkout'],
+    },
+    {
+      name: 'Pro',
+      price: 19,
+      duration: 'MONTHLY' as const,
+      maxStores: 3,
+      maxProducts: 500,
+      fulfillmentMethods: [...allChannels],
+      features: ['3 stores', '500 products', 'Telegram checkout', 'Stripe, MercadoPago & Zelle payments'],
+    },
+    {
+      name: 'Business',
+      price: 49,
+      duration: 'MONTHLY' as const,
+      maxStores: -1,
+      maxProducts: -1,
+      fulfillmentMethods: [...allChannels],
+      features: ['Unlimited stores', 'Unlimited products', 'Every checkout channel', 'Priority support'],
+    },
   ];
 
   for (const plan of plans) {

@@ -203,9 +203,9 @@ describe('TenantsService — MercadoPago runs on the platform account', () => {
   it('still respects the plan when switching the channel on', async () => {
     const { service } = buildService({ allowedMethods: ['WHATSAPP'] });
 
-    await expect(
-      service.upsertPaymentSetting(TENANT_ID, { provider: 'MERCADOPAGO', isEnabled: true }),
-    ).rejects.toThrow(ForbiddenException);
+    await expect(service.upsertPaymentSetting(TENANT_ID, { provider: 'MERCADOPAGO', isEnabled: true })).rejects.toThrow(
+      ForbiddenException,
+    );
   });
 
   it('never hands out per-store MercadoPago credentials', async () => {

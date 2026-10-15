@@ -26,6 +26,13 @@ export function toTenantSettingsView<
     limitsOverride?: unknown;
   },
 >(tenant: T) {
-  const { smtpPassword, telegramBotToken, adminMetadata, commissionRate, limitsOverride, ...rest } = tenant;
+  const {
+    smtpPassword,
+    telegramBotToken,
+    adminMetadata: _adminMetadata,
+    commissionRate: _commissionRate,
+    limitsOverride: _limitsOverride,
+    ...rest
+  } = tenant;
   return { ...rest, smtpPasswordSet: !!smtpPassword, telegramBotTokenSet: !!telegramBotToken };
 }

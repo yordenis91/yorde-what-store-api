@@ -38,7 +38,11 @@ function buildProcessor(
     text: () => Promise.resolve('error body'),
   }) as unknown as typeof fetch;
 
-  return { processor: new OrderNotificationProcessor(prisma, pushService, { get: () => 'test-key' } as any), send, deviceTokenFindMany };
+  return {
+    processor: new OrderNotificationProcessor(prisma, pushService, { get: () => 'test-key' } as any),
+    send,
+    deviceTokenFindMany,
+  };
 }
 
 describe('OrderNotificationProcessor', () => {
