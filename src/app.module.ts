@@ -23,6 +23,7 @@ import {
   platformConfig,
 } from './config';
 import { validateEnv } from './config/validate-env';
+import { AccountThrottleModule } from './common/security/account-throttle.module';
 import { winstonLoggerOptions } from './logger/winston.config';
 
 import { PrismaModule } from './prisma/prisma.module';
@@ -112,6 +113,7 @@ import { AppService } from './app.service';
         ),
       }),
     }),
+    AccountThrottleModule,
     PrismaModule,
     QueueModule,
     AuthModule,

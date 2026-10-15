@@ -8,6 +8,7 @@ import * as bcrypt from 'bcrypt';
 import { authenticator } from 'otplib';
 import * as qrcode from 'qrcode';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AccountThrottleService } from '../../common/security/account-throttle.service';
 import { getScopedClient } from '../../prisma/tenant-context';
 import { EMAIL_JOB_OPTIONS, EMAIL_QUEUE } from '../../queue/queue.constants';
 import { EmailJobData } from '../../queue/processors/email.processor';
@@ -36,6 +37,14 @@ export interface TokenPairWithMobile extends TokenPair {
   mobileRefreshToken?: string;
 }
 
+/** Failed guesses against one account before it stops accepting them for the window. */
+const LOGIN_FAILURE_LIMIT = 10;
+const LOGIN_FAILURE_WINDOW_S = 15 * 60;
+const TOTP_FAILURE_LIMIT = 5;
+const TOTP_FAILURE_WINDOW_S = 5 * 60;
+/** bcrypt hash of a random string: compared against when the account does not exist. */
+const DUMMY_PASSWORD_HASH = '$2b$12$p2DpIBcB07LAoM78GkFfPu9kLwH2ipedPV7wrqp7qJF2uayJ0Gz5G';
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -43,6 +52,7 @@ export class AuthService {
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
     @InjectQueue(EMAIL_QUEUE) private readonly emailQueue: Queue,
+    private readonly accountThrottle?: AccountThrottleService,
   ) {}
 
   /**
@@ -119,11 +129,15 @@ export class AuthService {
   }
 
   async login(dto: LoginDto) {
+    await this.accountThrottle?.assertNotLocked('login', dto.email, LOGIN_FAILURE_LIMIT);
     const user = await this.client.user.findUnique({ where: { email: dto.email } });
-    if (!user || !user.isActive) throw new UnauthorizedException('Invalid credentials');
-
-    const valid = await bcrypt.compare(dto.password, user.passwordHash);
-    if (!valid) throw new UnauthorizedException('Invalid credentials');
+    // Same work whether or not the account exists, so response time does not reveal who is registered.
+    const valid = await bcrypt.compare(dto.password, user?.passwordHash ?? DUMMY_PASSWORD_HASH);
+    if (!user || !user.isActive || !valid) {
+      await this.accountThrottle?.recordFailure('login', dto.email, LOGIN_FAILURE_WINDOW_S);
+      throw new UnauthorizedException('Invalid credentials');
+    }
+    await this.accountThrottle?.clear('login', dto.email);
 
     if (user.twoFactorEnabled) {
       const challengeToken = this.jwt.sign(
@@ -145,11 +159,17 @@ export class AuthService {
     }
     if (payload.purpose !== '2fa') throw new UnauthorizedException('Invalid challenge token');
 
+    // The challenge token is reusable for its 5 minutes, so the guesses are counted per account.
+    await this.accountThrottle?.assertNotLocked('2fa', payload.sub, TOTP_FAILURE_LIMIT);
     const user = await this.client.user.findUnique({ where: { id: payload.sub } });
     if (!user?.totpSecret) throw new UnauthorizedException('2FA not configured');
 
     const valid = authenticator.check(code, user.totpSecret);
-    if (!valid) throw new UnauthorizedException('Invalid 2FA code');
+    if (!valid) {
+      await this.accountThrottle?.recordFailure('2fa', payload.sub, TOTP_FAILURE_WINDOW_S);
+      throw new UnauthorizedException('Invalid 2FA code');
+    }
+    await this.accountThrottle?.clear('2fa', payload.sub);
 
     return this.completeLogin(user.id, deviceId);
   }
@@ -330,30 +350,58 @@ export class AuthService {
     return { secret, otpauthUrl: otpauth, qrDataUrl };
   }
 
-  async enableTwoFactor(userId: string, dto: EnableTwoFactorDto) {
+  async enableTwoFactor(userId: string, dto: EnableTwoFactorDto, keepRefreshToken?: string) {
+    await this.accountThrottle?.assertNotLocked('2fa-manage', userId, TOTP_FAILURE_LIMIT);
     const user = await this.client.user.findUniqueOrThrow({ where: { id: userId } });
     if (!user.totpSecret) throw new BadRequestException('Call /auth/2fa/setup first');
 
     const valid = authenticator.check(dto.code, user.totpSecret);
-    if (!valid) throw new BadRequestException('Invalid 2FA code');
+    if (!valid) {
+      await this.accountThrottle?.recordFailure('2fa-manage', userId, TOTP_FAILURE_WINDOW_S);
+      throw new BadRequestException('Invalid 2FA code');
+    }
+    await this.accountThrottle?.clear('2fa-manage', userId);
 
     await this.client.user.update({ where: { id: userId }, data: { twoFactorEnabled: true } });
+    await this.revokeOtherSessions(userId, keepRefreshToken);
     return { twoFactorEnabled: true };
   }
 
-  async disableTwoFactor(userId: string, code: string) {
+  async disableTwoFactor(userId: string, code: string, keepRefreshToken?: string) {
+    await this.accountThrottle?.assertNotLocked('2fa-manage', userId, TOTP_FAILURE_LIMIT);
     const user = await this.client.user.findUniqueOrThrow({ where: { id: userId } });
     // A stolen access token alone must not be enough to drop the second factor.
     if (user.twoFactorEnabled) {
       if (!user.totpSecret || !authenticator.check(code, user.totpSecret)) {
+        await this.accountThrottle?.recordFailure('2fa-manage', userId, TOTP_FAILURE_WINDOW_S);
         throw new BadRequestException('Invalid 2FA code');
       }
     }
+    await this.accountThrottle?.clear('2fa-manage', userId);
     await this.client.user.update({
       where: { id: userId },
       data: { twoFactorEnabled: false, totpSecret: null },
     });
+    await this.revokeOtherSessions(userId, keepRefreshToken);
     return { twoFactorEnabled: false };
+  }
+
+  /**
+   * Changing the second factor ends every other session: otherwise a refresh token someone already
+   * stole keeps working through the change. The session making the change (its refresh cookie) stays;
+   * mobile sessions cannot be told apart from here, so they sign in again.
+   */
+  private async revokeOtherSessions(userId: string, keepRawRefreshToken?: string) {
+    const now = new Date();
+    await this.client.refreshToken.updateMany({
+      where: {
+        userId,
+        revokedAt: null,
+        ...(keepRawRefreshToken && { NOT: { tokenHash: this.hashToken(keepRawRefreshToken) } }),
+      },
+      data: { revokedAt: now },
+    });
+    await this.client.mobileRefreshToken.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: now } });
   }
 
   /**
@@ -408,9 +456,20 @@ export class AuthService {
       throw new UnauthorizedException('Reset link is invalid or expired');
     }
 
+    // Claim the token atomically: two requests presenting the same link must not both succeed.
+    const claimed = await this.client.passwordResetToken.updateMany({
+      where: { id: resetToken.id, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+    if (claimed.count === 0) throw new UnauthorizedException('Reset link is invalid or expired');
+    // Every other outstanding link for this account (invite, earlier resets) dies with it.
+    await this.client.passwordResetToken.updateMany({
+      where: { userId: resetToken.userId, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
     await this.client.user.update({ where: { id: resetToken.userId }, data: { passwordHash } });
-    await this.client.passwordResetToken.update({ where: { id: resetToken.id }, data: { usedAt: new Date() } });
     await this.client.refreshToken.updateMany({
       where: { userId: resetToken.userId, revokedAt: null },
       data: { revokedAt: new Date() },
@@ -450,6 +509,9 @@ export class AuthService {
     const refreshToken = this.jwt.sign(payload, {
       secret: this.config.get<string>('jwt.refreshSecret'),
       expiresIn: this.config.get<string>('jwt.refreshExpiresIn'),
+      // Without a unique id, two logins in the same second produce byte-identical tokens (same iat),
+      // which then share one hash: rotating or revoking one leaves its twin row valid.
+      jwtid: randomUUID(),
     });
 
     const decoded = this.jwt.decode(refreshToken) as { exp: number };

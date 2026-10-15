@@ -88,7 +88,10 @@ function buildService(overrides: { tenant?: Record<string, unknown> | null } = {
   } as unknown as ConfigService;
 
   const resetTokenCreate = jest.fn().mockResolvedValue({});
-  (prisma as any).passwordResetToken = { create: resetTokenCreate };
+  (prisma as any).passwordResetToken = {
+    create: resetTokenCreate,
+    updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+  };
   const emailQueue = { add: jest.fn().mockResolvedValue({}) };
 
   const service = new PlatformTenantsService(prisma, jwt, config, emailQueue as any);

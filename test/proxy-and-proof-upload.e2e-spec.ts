@@ -25,11 +25,13 @@ describe('Throttler client IP behind a proxy (e2e)', () => {
     (app.get<ThrottlerStorageService>(ThrottlerStorage).storage as Map<string, unknown>).clear();
   });
 
-  const login = (forwardedFor: string) =>
+  // Each test uses its own email: failed logins are also counted per account (not only per IP),
+  // and these tests are about the per-IP bucket alone.
+  const login = (forwardedFor: string, email = 'nobody@test.com') =>
     request(app.getHttpServer())
       .post('/api/v1/auth/login')
       .set('X-Forwarded-For', forwardedFor)
-      .send({ email: 'nobody@test.com', password: 'wrong-password' });
+      .send({ email, password: 'wrong-password' });
 
   it('without trust proxy every visitor shares one bucket (the bug)', async () => {
     app.getHttpAdapter().getInstance().set('trust proxy', false);
@@ -39,9 +41,10 @@ describe('Throttler client IP behind a proxy (e2e)', () => {
 
   it('with trust proxy each client IP has its own bucket', async () => {
     app.getHttpAdapter().getInstance().set('trust proxy', 1);
-    for (let i = 0; i < 5; i++) await login('203.0.113.1');
-    expect((await login('203.0.113.1')).status).toBe(429);
-    expect((await login('203.0.113.2')).status).not.toBe(429);
+    const email = 'proxied@test.com';
+    for (let i = 0; i < 5; i++) await login('203.0.113.1', email);
+    expect((await login('203.0.113.1', email)).status).toBe(429);
+    expect((await login('203.0.113.2', email)).status).not.toBe(429);
   });
 });
 

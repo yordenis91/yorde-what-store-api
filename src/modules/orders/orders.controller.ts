@@ -4,7 +4,6 @@ import {
   Body,
   Controller,
   Delete,
-  ForbiddenException,
   Get,
   MessageEvent,
   Param,
@@ -193,11 +192,10 @@ export class OrdersController {
     @Param('id') id: string,
     @Body() dto: UpdateOrderStatusDto,
   ) {
-    // A refund moves real money through the owner's gateway credentials.
-    if (dto.status === 'REFUNDED' && user.tenantRole !== 'OWNER' && user.globalRole !== 'SUPER_ADMIN') {
-      throw new ForbiddenException('Only the store owner can refund an order');
-    }
-    return this.ordersService.updateStatus(tenantId, id, dto.status);
+    // A refund moves real money through the owner's gateway credentials, and so does cancelling a
+    // paid card order; the service decides which transitions those are.
+    const canRefund = user.tenantRole === 'OWNER' || user.globalRole === 'SUPER_ADMIN';
+    return this.ordersService.updateStatus(tenantId, id, dto.status, { canRefund });
   }
 
   /** The admin-side review action for a Zelle order's submitted proof — marks it paid and confirmed, and queues the invoice, exactly like a successful Stripe/MercadoPago webhook would. */

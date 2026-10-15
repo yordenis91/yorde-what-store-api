@@ -1,5 +1,5 @@
 import { ConfigService } from '@nestjs/config';
-import { ConflictException, BadRequestException, NotFoundException } from '@nestjs/common';
+import { ConflictException, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getQueueToken } from '@nestjs/bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -79,6 +79,9 @@ function createPrismaDouble(options: {
   const counts = [...(options.stockUpdateCounts ?? [])];
   const nextCount = () => ({ count: counts.length > 0 ? counts.shift()! : 1 });
 
+  // The order row as the database would hold it: conditional updates read and change it.
+  const currentOrder: Record<string, unknown> | null = options.order ? { ...options.order } : null;
+
   const db = {
     tenant: {
       findUniqueOrThrow: jest.fn().mockResolvedValue(tenant),
@@ -118,12 +121,18 @@ function createPrismaDouble(options: {
         .mockImplementation(({ data }: { data: Record<string, unknown> }) =>
           Promise.resolve({ id: 'order-1', items: [], ...data, ...options.order }),
         ),
-      update: jest
-        .fn()
-        .mockImplementation(({ data }: { data: Record<string, unknown> }) =>
-          Promise.resolve({ ...(options.order ?? {}), ...data }),
-        ),
-      findFirst: jest.fn().mockResolvedValue(options.order ?? null),
+      update: jest.fn().mockImplementation(({ data }: { data: Record<string, unknown> }) => {
+        Object.assign(currentOrder ?? {}, data);
+        return Promise.resolve({ ...(currentOrder ?? {}), ...data });
+      }),
+      updateMany: jest.fn().mockImplementation(({ where, data }: { where: { status?: string }; data: object }) => {
+        if (!currentOrder || (where.status !== undefined && currentOrder.status !== where.status)) {
+          return Promise.resolve({ count: 0 });
+        }
+        Object.assign(currentOrder, data);
+        return Promise.resolve({ count: 1 });
+      }),
+      findFirst: jest.fn().mockImplementation(() => Promise.resolve(currentOrder)),
       findMany: jest.fn().mockResolvedValue(options.orders ?? []),
       count: jest.fn().mockResolvedValue(0),
     },
@@ -639,6 +648,94 @@ describe('OrdersService refunds', () => {
     await service.updateStatus(TENANT_ID, 'order-1', 'REFUNDED');
 
     expect(refundOrderPayment).not.toHaveBeenCalled();
+  });
+});
+
+describe('OrdersService — cancelling and racing', () => {
+  const paidStripe = {
+    id: 'order-1',
+    status: 'CONFIRMED',
+    paymentStatus: 'PAID',
+    fulfillmentMethod: 'STRIPE',
+    couponId: 'coupon-1',
+    stripePaymentIntentId: 'pi_123',
+    items: [{ productId: 'p1', variantId: null, quantity: 2 }],
+  };
+
+  it('refunds a paid card order that is cancelled, and gives back its stock and coupon use', async () => {
+    const double = createPrismaDouble({ tenant: { tracksInventory: true }, order: paidStripe });
+    const refundOrderPayment = jest.fn().mockResolvedValue(undefined);
+    const service = await buildService(double, { refundOrderPayment });
+
+    const updated = await service.updateStatus(TENANT_ID, 'order-1', 'CANCELLED');
+
+    expect(refundOrderPayment).toHaveBeenCalledTimes(1);
+    expect(updated).toMatchObject({ status: 'CANCELLED', paymentStatus: 'REFUNDED' });
+    expect(double.stockUpdates).toHaveLength(1);
+    expect(double.db.coupon.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ id: 'coupon-1' }) }),
+    );
+  });
+
+  it('does not let STAFF cancel a paid card order, since that returns the money', async () => {
+    const double = createPrismaDouble({ order: paidStripe });
+    const refundOrderPayment = jest.fn();
+    const service = await buildService(double, { refundOrderPayment });
+
+    await expect(service.updateStatus(TENANT_ID, 'order-1', 'CANCELLED', { canRefund: false })).rejects.toThrow(
+      ForbiddenException,
+    );
+    expect(refundOrderPayment).not.toHaveBeenCalled();
+    expect(double.db.order.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('still lets STAFF cancel an order that has not been paid', async () => {
+    const double = createPrismaDouble({
+      order: { ...paidStripe, status: 'PENDING', paymentStatus: 'PENDING', couponId: null },
+    });
+    const service = await buildService(double, { refundOrderPayment: jest.fn() });
+
+    await expect(service.updateStatus(TENANT_ID, 'order-1', 'CANCELLED', { canRefund: false })).resolves.toMatchObject({
+      status: 'CANCELLED',
+    });
+  });
+
+  it('does nothing else when the order changed under it (another request or the sweep got there first)', async () => {
+    const double = createPrismaDouble({
+      tenant: { tracksInventory: true },
+      order: { ...paidStripe, status: 'PENDING', paymentStatus: 'PENDING', couponId: 'coupon-1' },
+    });
+    double.db.order.updateMany.mockResolvedValueOnce({ count: 0 });
+    const refundOrderPayment = jest.fn();
+    const service = await buildService(double, { refundOrderPayment });
+
+    await expect(service.updateStatus(TENANT_ID, 'order-1', 'CANCELLED')).rejects.toThrow(ConflictException);
+    expect(double.stockUpdates).toHaveLength(0);
+    expect(double.db.coupon.updateMany).not.toHaveBeenCalled();
+    expect(refundOrderPayment).not.toHaveBeenCalled();
+  });
+});
+
+describe('OrdersService — what a customer may order', () => {
+  it('requires a variant for a product that is sold in variants', async () => {
+    const product = {
+      ...buildProduct({ variants: [{ id: 'v1', name: 'Large', sku: 'S-L', price: '40.00', quantity: 5 }] }),
+      hasVariants: true,
+    };
+    const service = await buildService(createPrismaDouble({ products: [product as any] }));
+
+    await expect(service.create(TENANT_ID, baseOrder)).rejects.toThrow(/Choose a variant/);
+  });
+
+  it('only prices an active shipping method for the storefront', async () => {
+    const double = createPrismaDouble({});
+    const service = await buildService(double);
+
+    await service.create(TENANT_ID, { ...baseOrder, shippingId: 'ship-1' }).catch(() => undefined);
+
+    expect(double.db.shipping.findFirst).toHaveBeenCalledWith({
+      where: expect.objectContaining({ id: 'ship-1', isActive: true }),
+    });
   });
 });
 

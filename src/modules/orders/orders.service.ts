@@ -1,7 +1,13 @@
 import { assertSafeImageUrl } from '../uploads/upload-url.util';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Prisma } from '@prisma/client';
 import { Queue } from 'bullmq';
@@ -310,6 +316,11 @@ export class OrdersService {
 
       const variant = item.variantId ? product.variants.find((v) => v.id === item.variantId) : undefined;
       if (item.variantId && !variant) throw new BadRequestException(`Variant ${item.variantId} not found`);
+      // A product sold in variants is priced and stocked per variant. Without one the line would be
+      // charged the base price and take stock from the product itself.
+      if (!variant && product.hasVariants && product.variants.length > 0) {
+        throw new BadRequestException(`Choose a variant for ${product.name}`);
+      }
 
       const unitPrice = Number(variant?.price ?? product.price);
       const taxes = product.taxes.map((t) => ({ name: t.tax.name, rate: Number(t.tax.rate) }));
@@ -350,7 +361,10 @@ export class OrdersService {
     let shippingTotal = 0;
     let shipping = null;
     if (input.shippingId) {
-      shipping = await this.prisma.db.shipping.findFirst({ where: { id: input.shippingId, tenantId } });
+      shipping = await this.prisma.db.shipping.findFirst({
+        // A shipping method the store switched off must not stay orderable by its id.
+        where: { id: input.shippingId, tenantId, ...(options.onlyPublished && { isActive: true }) },
+      });
       if (!shipping) throw new BadRequestException('Invalid shipping option');
       shippingTotal = Number(shipping.cost);
     }
@@ -633,33 +647,68 @@ export class OrdersService {
     return { path, orderNumber: order.orderNumber };
   }
 
-  async updateStatus(tenantId: string, id: string, status: string) {
+  /**
+   * `canRefund`: whoever asks may return money through the owner's gateway credentials.
+   * Cancelling a paid card order does exactly that (it is refunded, not just labelled).
+   */
+  async updateStatus(tenantId: string, id: string, status: string, { canRefund = true } = {}) {
     const order = await this.findOne(tenantId, id);
 
     if (TERMINAL_ORDER_STATUSES.includes(order.status as OrderStatusValue) && status !== order.status) {
       throw new ConflictException(`Order is already ${order.status} and cannot move to ${status}`);
     }
 
-    // Cancelling frees what the order took. Guarded on the current status so
-    // cancelling an already-cancelled order doesn't credit the stock twice.
-    if (status === 'CANCELLED' && order.status !== 'CANCELLED') {
-      const tenant = await this.prisma.db.tenant.findUniqueOrThrow({ where: { id: tenantId } });
-      if (tenant.tracksInventory) await this.releaseStock(order.items);
+    // A Stripe/MercadoPago-paid order has an actual charge to reverse, and only once: re-marking
+    // an already-refunded order must not call the provider's refund API a second time. For
+    // WhatsApp/Telegram/Zelle, "Refunded" is just a label for money returned by other means.
+    const isPaidGatewayOrder =
+      order.paymentStatus === 'PAID' &&
+      (order.fulfillmentMethod === 'STRIPE' || order.fulfillmentMethod === 'MERCADOPAGO');
+    const returnsMoney =
+      order.paymentStatus === 'PAID' && (status === 'REFUNDED' || (status === 'CANCELLED' && isPaidGatewayOrder));
+    // Marking an order REFUNDED is an accounting decision for the owner even when no gateway is involved.
+    if ((returnsMoney || status === 'REFUNDED') && !canRefund) {
+      throw new ForbiddenException('Only the store owner can refund an order');
     }
 
     const data: Record<string, unknown> = { status };
+    if (status === 'REFUNDED' && order.paymentStatus === 'PAID') data.paymentStatus = 'REFUNDED';
+    if (status === 'CANCELLED' && returnsMoney) data.paymentStatus = 'REFUNDED';
 
-    // A WhatsApp/Telegram order has no online charge to reverse — "Refunded"
-    // there is just a status label for money returned by other means. Only a
-    // Stripe/MercadoPago-paid order has an actual charge, and only once:
-    // re-marking an already-refunded order REFUNDED must not charge the
-    // provider's refund API a second time.
-    if (status === 'REFUNDED' && order.paymentStatus === 'PAID') {
-      await this.paymentsService.refundOrderPayment(tenantId, order);
-      data.paymentStatus = 'REFUNDED';
+    // Claim the transition first, conditional on the status that was read. The sweep, a payment
+    // webhook or another staff member may have moved the order since; if so nothing below runs
+    // (stock is not released twice, a cancelled order is not overwritten). The row lock also makes
+    // a concurrent request wait for this one instead of racing it.
+    if (status !== order.status) {
+      const claimed = await this.prisma.db.order.updateMany({
+        where: { id, tenantId, status: order.status },
+        data: data as any,
+      });
+      if (claimed.count === 0) {
+        throw new ConflictException('The order changed while you were editing it; reload and try again');
+      }
+    } else if (Object.keys(data).length > 1) {
+      await this.prisma.db.order.update({ where: { id }, data: data as any });
     }
 
-    const updated = await this.prisma.db.order.update({ where: { id }, data: data as any });
+    // Cancelling frees what the order took: stock and the coupon use.
+    if (status === 'CANCELLED' && order.status !== 'CANCELLED') {
+      const tenant = await this.prisma.db.tenant.findUniqueOrThrow({ where: { id: tenantId } });
+      if (tenant.tracksInventory) await this.releaseStock(order.items);
+      if (order.couponId) {
+        await this.prisma.db.coupon.updateMany({
+          where: { id: order.couponId, usageCount: { gt: 0 } },
+          data: { usageCount: { decrement: 1 } },
+        });
+      }
+    }
+
+    // After the writes, so a provider failure aborts the request transaction and rolls them back.
+    if (returnsMoney && order.status !== status) {
+      await this.paymentsService.refundOrderPayment(tenantId, order);
+    }
+
+    const updated = await this.findOne(tenantId, id);
     this.orderEvents.emit(tenantId, this.toOrderEvent('order.status_updated', updated));
     return updated;
   }

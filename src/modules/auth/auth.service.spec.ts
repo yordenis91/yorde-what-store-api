@@ -59,6 +59,7 @@ function buildService(overrides: {
         : { id: 'prt-1', userId: USER.id, expiresAt: new Date(Date.now() + 60_000), usedAt: null },
     );
   const resetTokenUpdate = jest.fn().mockResolvedValue({});
+  const resetTokenUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
 
   const prisma = {
     refreshToken: { findFirst, update, create, updateMany },
@@ -66,7 +67,12 @@ function buildService(overrides: {
     user: { findUniqueOrThrow, findUnique: userFindUnique, update: userUpdate },
     tenantMember: { findFirst: membershipFindFirst },
     tenant: { findUniqueOrThrow: tenantFindUniqueOrThrow },
-    passwordResetToken: { create: resetTokenCreate, findFirst: resetTokenFindFirst, update: resetTokenUpdate },
+    passwordResetToken: {
+      create: resetTokenCreate,
+      findFirst: resetTokenFindFirst,
+      update: resetTokenUpdate,
+      updateMany: resetTokenUpdateMany,
+    },
   } as unknown as PrismaService;
 
   const jwt = {
@@ -99,6 +105,7 @@ function buildService(overrides: {
     userFindUnique,
     userUpdate,
     resetTokenCreate,
+    resetTokenUpdateMany,
     resetTokenFindFirst,
     resetTokenUpdate,
     updateMany,
@@ -275,7 +282,7 @@ describe('AuthService.resetPassword', () => {
   });
 
   it('updates the password, marks the token used, and revokes existing refresh tokens on success', async () => {
-    const { service, userUpdate, resetTokenUpdate, updateMany } = buildService({
+    const { service, userUpdate, resetTokenUpdateMany, updateMany } = buildService({
       resetToken: { id: 'prt-1', userId: USER.id, expiresAt: new Date(Date.now() + 60_000), usedAt: null },
     });
 
@@ -289,10 +296,30 @@ describe('AuthService.resetPassword', () => {
       }),
     );
     expect(userUpdate.mock.calls[0][0].data.passwordHash).not.toBe('NewPass123!');
-    expect(resetTokenUpdate).toHaveBeenCalledWith({ where: { id: 'prt-1' }, data: { usedAt: expect.any(Date) } });
+    // The presented token is claimed atomically, then every other outstanding link for the account is voided.
+    expect(resetTokenUpdateMany).toHaveBeenNthCalledWith(1, {
+      where: { id: 'prt-1', usedAt: null },
+      data: { usedAt: expect.any(Date) },
+    });
+    expect(resetTokenUpdateMany).toHaveBeenNthCalledWith(2, {
+      where: { userId: USER.id, usedAt: null },
+      data: { usedAt: expect.any(Date) },
+    });
     expect(updateMany).toHaveBeenCalledWith({
       where: { userId: USER.id, revokedAt: null },
       data: { revokedAt: expect.any(Date) },
     });
+  });
+
+  it('rejects a link that another request used first', async () => {
+    const { service, resetTokenUpdateMany, userUpdate } = buildService({
+      resetToken: { id: 'prt-1', userId: USER.id, expiresAt: new Date(Date.now() + 60_000), usedAt: null },
+    });
+    resetTokenUpdateMany.mockResolvedValueOnce({ count: 0 });
+
+    await expect(service.resetPassword({ token: 'valid-token', password: 'NewPass123!' })).rejects.toThrow(
+      'Reset link is invalid or expired',
+    );
+    expect(userUpdate).not.toHaveBeenCalled();
   });
 });
