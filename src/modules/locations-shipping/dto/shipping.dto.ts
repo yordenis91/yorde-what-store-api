@@ -1,4 +1,4 @@
-import { IsBoolean, IsNumber, IsOptional, IsString, IsUUID, Min } from 'class-validator';
+import { IsBoolean, IsNumber, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
 
 export class CreateShippingDto {
   @IsString()
@@ -6,6 +6,7 @@ export class CreateShippingDto {
 
   @IsNumber()
   @Min(0)
+  @Max(1_000_000_000)
   cost: number;
 
   @IsOptional()
@@ -25,6 +26,7 @@ export class UpdateShippingDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(1_000_000_000)
   cost?: number;
 
   @IsOptional()

@@ -1,5 +1,14 @@
 import { Type } from 'class-transformer';
-import { ArrayMinSize, IsArray, IsOptional, IsString, IsUUID, ValidateNested } from 'class-validator';
+import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+  ValidateNested,
+} from 'class-validator';
 import { OrderItemInputDto } from './create-order.dto';
 
 /**
@@ -9,12 +18,14 @@ import { OrderItemInputDto } from './create-order.dto';
 export class QuoteOrderDto {
   @IsArray()
   @ArrayMinSize(1)
+  @ArrayMaxSize(100)
   @ValidateNested({ each: true })
   @Type(() => OrderItemInputDto)
   items: OrderItemInputDto[];
 
   @IsOptional()
   @IsString()
+  @MaxLength(64)
   couponCode?: string;
 
   @IsOptional()

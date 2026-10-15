@@ -54,6 +54,12 @@ export const MAX_DIMENSION_PX = 1600;
 // and bandwidth on detail nobody sees.
 export const LOGO_MAX_DIMENSION_PX = 512;
 const WEBP_QUALITY = 82;
+/**
+ * Decoded size, not file size, is what costs memory: a 15 MB PNG or GIF can be hundreds of millions
+ * of pixels, or hundreds of frames. 50 MP covers any phone camera; for an animation it is the total
+ * across frames.
+ */
+export const MAX_INPUT_PIXELS = 50_000_000;
 
 /**
  * `{ animated: true }` makes this handle multi-frame input (animated GIFs,
@@ -63,7 +69,13 @@ const WEBP_QUALITY = 82;
  */
 export async function resizeToWebp(buffer: Buffer, maxDimension = MAX_DIMENSION_PX): Promise<Buffer> {
   try {
-    return await sharp(buffer, { animated: true })
+    const meta = await sharp(buffer, { animated: true, limitInputPixels: MAX_INPUT_PIXELS }).metadata();
+    const frames = meta.pages ?? 1;
+    const frameHeight = meta.pageHeight ?? meta.height ?? 0;
+    if ((meta.width ?? 0) * frameHeight * frames > MAX_INPUT_PIXELS) {
+      throw new BadRequestException('This image is too large to process');
+    }
+    return await sharp(buffer, { animated: true, limitInputPixels: MAX_INPUT_PIXELS })
       // Bakes in the EXIF orientation tag (a phone photo taken in portrait is
       // very often stored "sideways" with a rotation flag) then drops the
       // now-redundant EXIF block along with everything else — smaller file,
@@ -72,7 +84,8 @@ export async function resizeToWebp(buffer: Buffer, maxDimension = MAX_DIMENSION_
       .resize({ width: maxDimension, height: maxDimension, fit: 'inside', withoutEnlargement: true })
       .webp({ quality: WEBP_QUALITY })
       .toBuffer();
-  } catch {
+  } catch (err) {
+    if (err instanceof BadRequestException) throw err;
     throw new BadRequestException('Could not process this image — the file may be corrupt or not a real image');
   }
 }

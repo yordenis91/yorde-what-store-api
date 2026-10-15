@@ -131,8 +131,16 @@ export class TenantsService {
       include: { plan: true },
       orderBy: { createdAt: 'desc' },
     });
-    const current = subscriptions.find((s) => !isLapsed(s));
-    const maxStores = current?.plan.maxStores ?? FALLBACK_ENTITLEMENTS.maxStores;
+    // The best plan the owner currently holds on any of their stores. Every store has a
+    // subscription of its own, and a newly created one starts Free: taking "the newest" would
+    // let that Free row cancel the paid plan that allowed the store in the first place.
+    const live = subscriptions.filter((s) => !isLapsed(s));
+    const maxStores =
+      live.length === 0
+        ? FALLBACK_ENTITLEMENTS.maxStores
+        : live.some((s) => s.plan.maxStores === -1)
+          ? -1
+          : Math.max(...live.map((s) => s.plan.maxStores));
     if (maxStores !== -1 && owned >= maxStores) {
       throw new ForbiddenException('Store limit reached for your current plan');
     }
@@ -140,12 +148,17 @@ export class TenantsService {
     const slugTaken = await this.prisma.tenant.findUnique({ where: { slug: dto.slug } });
     if (slugTaken) throw new ConflictException('Store slug already taken');
 
+    // Like a registered store, it starts on the free plan: every store carries its own
+    // subscription (limits are resolved per store), and upgrades attach to that row.
+    const freePlan = await this.plansService.findFreePlan();
+
     return this.prisma.tenant.create({
       data: {
         name: dto.name,
         slug: dto.slug,
         ownerId: userId,
         members: { create: { userId, role: 'OWNER' } },
+        ...(freePlan && { subscriptions: { create: { planId: freePlan.id, status: 'ACTIVE' } } }),
       },
     });
   }

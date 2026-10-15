@@ -41,7 +41,8 @@ export class OrderNotificationProcessor extends WorkerHost {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: tenant.telegramChatId, text: message }),
+      // Telegram rejects anything over 4096 characters, which would fail the whole notification.
+      body: JSON.stringify({ chat_id: tenant.telegramChatId, text: message.slice(0, 4000) }),
     });
 
     if (!response.ok) {

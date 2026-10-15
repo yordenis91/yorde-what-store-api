@@ -223,7 +223,7 @@ describe('PlansService.getEntitlements — expiry', () => {
 
 describe('PlansService manual renewals', () => {
   const DAY = 24 * 60 * 60 * 1000;
-  const proPlan = { id: 'plan-pro', price: 19, duration: 'MONTHLY', isActive: true };
+  const proPlan = { id: 'plan-pro', price: 19, duration: 'MONTHLY', isActive: true, maxProducts: -1 };
   const freePlan = { id: 'plan-free', price: 0, duration: 'LIFETIME', isActive: true };
 
   function build(options: { requested?: Record<string, unknown>; subscription?: Record<string, unknown> | null }) {
@@ -319,6 +319,45 @@ describe('PlansService manual renewals', () => {
 
     const expiresAt: Date = update.mock.calls[0][0].data.expiresAt;
     expect(expiresAt.getTime()).toBeGreaterThan(Date.now() + 27 * DAY);
+  });
+
+  it('unpublishes the products over the new limit when the approved plan is smaller than the store', async () => {
+    const smaller = { ...proPlan, id: 'plan-small', maxProducts: 100 };
+    const { service } = build({
+      requested: smaller,
+      subscription: {
+        id: 'sub-1',
+        tenantId: TENANT_ID,
+        planId: 'plan-pro',
+        plan: proPlan,
+        requestedPlanId: 'plan-small',
+        status: 'PENDING_UPGRADE',
+        expiresAt: new Date(Date.now() + 5 * DAY),
+      },
+    });
+    const hide = jest.spyOn(service, 'hideProductsOverLimit').mockResolvedValue(3);
+
+    await service.approveUpgrade('sub-1');
+
+    expect(hide).toHaveBeenCalledWith(TENANT_ID);
+  });
+
+  it('does not touch the catalog when the approved plan has no product limit', async () => {
+    const { service } = build({
+      subscription: {
+        id: 'sub-1',
+        tenantId: TENANT_ID,
+        planId: 'plan-free',
+        plan: freePlan,
+        requestedPlanId: 'plan-pro',
+        status: 'PENDING_UPGRADE',
+      },
+    });
+    const hide = jest.spyOn(service, 'hideProductsOverLimit').mockResolvedValue(0);
+
+    await service.approveUpgrade('sub-1');
+
+    expect(hide).not.toHaveBeenCalled();
   });
 
   it('declines a request and leaves the current plan alone', async () => {
