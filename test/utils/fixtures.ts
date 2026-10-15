@@ -58,3 +58,67 @@ export async function seedCustomer(
 ) {
   return prisma.withTenant(tenantId, (tx) => tx.customer.create({ data: { tenantId, ...overrides } }));
 }
+
+/** A user who can really log in: `passwordHash` is a bcrypt hash, unlike seedTenant's placeholder 'x'. */
+export async function seedLoginUser(
+  prisma: PrismaService,
+  overrides: { email: string; password: string; name?: string; twoFactorSecret?: string },
+) {
+  const { hash } = await import('bcrypt');
+  return prisma.user.create({
+    data: {
+      email: overrides.email,
+      name: overrides.name ?? 'Test User',
+      passwordHash: await hash(overrides.password, 4),
+      ...(overrides.twoFactorSecret && { twoFactorEnabled: true, totpSecret: overrides.twoFactorSecret }),
+    },
+  });
+}
+
+/** An order with one line, written under the tenant's RLS scope. */
+export async function seedOrder(
+  prisma: PrismaService,
+  tenantId: string,
+  overrides: {
+    grandTotal?: string;
+    currency?: string;
+    status?: 'PENDING' | 'CONFIRMED' | 'CANCELLED' | 'REFUNDED';
+    paymentStatus?: 'PENDING' | 'PAID';
+    fulfillmentMethod?: 'STRIPE' | 'MERCADOPAGO' | 'ZELLE' | 'WHATSAPP';
+    createdAt?: Date;
+    productId?: string;
+    quantity?: number;
+    stripePaymentIntentId?: string;
+  } = {},
+) {
+  const total = overrides.grandTotal ?? '100.00';
+  return prisma.withTenant(tenantId, (tx) =>
+    tx.order.create({
+      data: {
+        tenantId,
+        orderNumber: `ORD-${Math.random().toString(36).slice(2, 10)}`,
+        customerName: 'Test Customer',
+        status: overrides.status ?? 'PENDING',
+        paymentStatus: overrides.paymentStatus ?? 'PENDING',
+        fulfillmentMethod: overrides.fulfillmentMethod ?? 'STRIPE',
+        currency: overrides.currency ?? 'USD',
+        subtotal: total,
+        grandTotal: total,
+        stripePaymentIntentId: overrides.stripePaymentIntentId,
+        ...(overrides.createdAt && { createdAt: overrides.createdAt }),
+        items: {
+          create: [
+            {
+              tenantId,
+              productId: overrides.productId,
+              productName: 'Widget',
+              unitPrice: total,
+              quantity: overrides.quantity ?? 1,
+              lineTotal: total,
+            },
+          ],
+        },
+      },
+    }),
+  );
+}

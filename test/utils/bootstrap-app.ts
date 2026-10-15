@@ -22,7 +22,8 @@ export async function bootstrapTestApp(): Promise<INestApplication> {
     .overrideProvider(ThrottlerStorage)
     .useClass(ThrottlerStorageService)
     .compile();
-  const app = moduleRef.createNestApplication();
+  // rawBody: signed webhooks (Stripe) are verified against the exact bytes received.
+  const app = moduleRef.createNestApplication({ rawBody: true });
 
   app.setGlobalPrefix('api/v1');
   app.use(cookieParser());

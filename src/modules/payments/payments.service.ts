@@ -172,7 +172,8 @@ export class PaymentsService {
       });
       if (refundNeeded && paymentIntentId) {
         try {
-          await this.refundPaymentIntent(tenantId, paymentIntentId);
+          // Outside a request there is no tenant-scoped client to read the credentials with.
+          await this.prisma.withTenant(tenantId, (tx) => this.refundPaymentIntent(tenantId, paymentIntentId, tx));
         } catch {
           this.logger.error(
             `Automatic refund of ${paymentIntentId} for cancelled order ${orderId} failed; refund manually`,
@@ -185,8 +186,12 @@ export class PaymentsService {
   }
 
   /** Reverses the actual Stripe charge — used by OrdersService when a paid order's status moves to REFUNDED. Never called for orders fulfilled outside Stripe; there is no online charge to reverse. */
-  async refundPaymentIntent(tenantId: string, paymentIntentId: string) {
-    const credentials = await this.tenantsService.getDecryptedCredentials(tenantId, 'STRIPE');
+  async refundPaymentIntent(
+    tenantId: string,
+    paymentIntentId: string,
+    client?: Parameters<TenantsService['getDecryptedCredentials']>[2],
+  ) {
+    const credentials = await this.tenantsService.getDecryptedCredentials(tenantId, 'STRIPE', client);
     try {
       await this.stripeAdapter.refund(paymentIntentId, credentials);
     } catch (err) {
