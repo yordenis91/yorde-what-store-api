@@ -1,4 +1,5 @@
 import { isHttpUrl } from '../common/utils/public-links';
+import { parseTrustProxy } from '../common/utils/trust-proxy';
 
 /**
  * Fails the boot instead of letting the app come up "healthy" with a secret
@@ -50,6 +51,9 @@ export function validateEnv(config: Record<string, unknown>): Record<string, unk
       `PUBLIC_WEB_URL must be an absolute http(s) URL (e.g. https://tudominio.com), got "${publicWebUrl}".`,
     );
   }
+
+  // Throws on an unsafe value ("true", "*") so a bad TRUST_PROXY stops the boot.
+  parseTrustProxy(typeof config.TRUST_PROXY === 'string' ? config.TRUST_PROXY : undefined);
 
   return config;
 }
