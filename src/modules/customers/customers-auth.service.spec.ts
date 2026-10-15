@@ -12,7 +12,10 @@ function buildService({ customer }: { customer: { id: string; email: string | nu
       tenant: {
         findUniqueOrThrow: jest.fn().mockResolvedValue({ name: 'Mi Tienda', slug: 'mi-tienda', locale: 'es' }),
       },
-      customerPasswordResetToken: { create: jest.fn().mockResolvedValue({}) },
+      customerPasswordResetToken: {
+        create: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
     },
   } as unknown as PrismaService;
   const config = {

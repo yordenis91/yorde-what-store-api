@@ -138,15 +138,15 @@ export class AuthController {
   }
 
   @Post('2fa/enable')
-  async enableTwoFactor(@CurrentUser() user: AuthenticatedUser, @Body() dto: EnableTwoFactorDto) {
+  async enableTwoFactor(@CurrentUser() user: AuthenticatedUser, @Body() dto: EnableTwoFactorDto, @Req() req: Request) {
     if (user.impersonatedBy) throw new UnauthorizedException('Not allowed while impersonating');
-    return this.authService.enableTwoFactor(user.id, dto);
+    return this.authService.enableTwoFactor(user.id, dto, req.cookies?.[REFRESH_COOKIE]);
   }
 
   @Post('2fa/disable')
-  async disableTwoFactor(@CurrentUser() user: AuthenticatedUser, @Body() dto: EnableTwoFactorDto) {
+  async disableTwoFactor(@CurrentUser() user: AuthenticatedUser, @Body() dto: EnableTwoFactorDto, @Req() req: Request) {
     if (user.impersonatedBy) throw new UnauthorizedException('Not allowed while impersonating');
-    return this.authService.disableTwoFactor(user.id, dto.code);
+    return this.authService.disableTwoFactor(user.id, dto.code, req.cookies?.[REFRESH_COOKIE]);
   }
 
   private setRefreshCookie(res: Response, token: string) {

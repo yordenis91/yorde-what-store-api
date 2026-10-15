@@ -53,7 +53,7 @@ function buildService(
   const delegates = {
     tenantMember: { findMany, findFirst, update, findUnique: memberFindUnique, create: memberCreate },
     user: { findUnique: userFindUnique, create: userCreate },
-    passwordResetToken: { create: resetTokenCreate },
+    passwordResetToken: { create: resetTokenCreate, updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     deviceToken: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     mobileRefreshToken: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
   };

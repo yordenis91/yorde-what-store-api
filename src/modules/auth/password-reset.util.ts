@@ -20,6 +20,8 @@ export async function issuePasswordResetToken(
   userId: string,
   ttlMs: number = PASSWORD_RESET_TOKEN_TTL_MS,
 ): Promise<string> {
+  // One live link per account: a newer request voids older ones (a 72h invite, an earlier reset).
+  await prisma.passwordResetToken.updateMany({ where: { userId, usedAt: null }, data: { usedAt: new Date() } });
   const rawToken = randomBytes(32).toString('hex');
   await prisma.passwordResetToken.create({
     data: {

@@ -6,6 +6,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AccountThrottleService } from '../../common/security/account-throttle.service';
 import { EMAIL_JOB_OPTIONS, EMAIL_QUEUE } from '../../queue/queue.constants';
 import { EmailJobData } from '../../queue/processors/email.processor';
 import { MobileRefreshResult } from '../../common/utils/mobile-refresh-response.util';
@@ -32,6 +33,9 @@ export interface CustomerTokenPairWithMobile extends CustomerTokenPair {
   mobileRefreshToken?: string;
 }
 
+/** bcrypt hash of a random string: compared against when the account does not exist. */
+const DUMMY_PASSWORD_HASH = '$2b$12$p2DpIBcB07LAoM78GkFfPu9kLwH2ipedPV7wrqp7qJF2uayJ0Gz5G';
+
 @Injectable()
 export class CustomersAuthService {
   constructor(
@@ -39,6 +43,7 @@ export class CustomersAuthService {
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
     @InjectQueue(EMAIL_QUEUE) private readonly emailQueue: Queue,
+    private readonly accountThrottle?: AccountThrottleService,
   ) {}
 
   async register(tenantId: string, dto: RegisterCustomerDto) {
@@ -60,13 +65,19 @@ export class CustomersAuthService {
   }
 
   async login(tenantId: string, dto: LoginCustomerDto) {
+    // Per account (and store), not just per client address.
+    const throttleId = `${tenantId}:${dto.email}`;
+    await this.accountThrottle?.assertNotLocked('customer-login', throttleId, 10);
     const customer = await this.prisma.db.customer.findUnique({
       where: { tenantId_email: { tenantId, email: dto.email } },
     });
-    if (!customer?.passwordHash) throw new UnauthorizedException('Invalid credentials');
-
-    const valid = await bcrypt.compare(dto.password, customer.passwordHash);
-    if (!valid) throw new UnauthorizedException('Invalid credentials');
+    // Same work whether or not the account exists, so response time does not reveal who is registered.
+    const valid = await bcrypt.compare(dto.password, customer?.passwordHash ?? DUMMY_PASSWORD_HASH);
+    if (!customer?.passwordHash || !valid) {
+      await this.accountThrottle?.recordFailure('customer-login', throttleId, 15 * 60);
+      throw new UnauthorizedException('Invalid credentials');
+    }
+    await this.accountThrottle?.clear('customer-login', throttleId);
 
     const tokens = await this.issueTokenPair(customer.id, tenantId);
     const mobileRefreshToken = dto.deviceId
@@ -168,6 +179,11 @@ export class CustomersAuthService {
         where: { id: tenantId },
         select: { name: true, slug: true, locale: true },
       });
+      // One live link per customer: a newer request voids older ones.
+      await this.prisma.db.customerPasswordResetToken.updateMany({
+        where: { customerId: customer.id, usedAt: null },
+        data: { usedAt: new Date() },
+      });
       const rawToken = randomBytes(32).toString('hex');
       await this.prisma.db.customerPasswordResetToken.create({
         data: {
@@ -215,12 +231,18 @@ export class CustomersAuthService {
 
     // The whole request already runs inside one transaction (TenantScopeInterceptor),
     // so these just need to go through the same scoped client — no nested $transaction.
-    const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
-    await this.prisma.db.customer.update({ where: { id: customer.id }, data: { passwordHash } });
-    await this.prisma.db.customerPasswordResetToken.update({
-      where: { id: resetToken.id },
+    // Claim the token atomically so the same link cannot be used twice, then void any others.
+    const claimed = await this.prisma.db.customerPasswordResetToken.updateMany({
+      where: { id: resetToken.id, usedAt: null },
       data: { usedAt: new Date() },
     });
+    if (claimed.count === 0) throw new UnauthorizedException('Reset link is invalid or expired');
+    await this.prisma.db.customerPasswordResetToken.updateMany({
+      where: { customerId: customer.id, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+    const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
+    await this.prisma.db.customer.update({ where: { id: customer.id }, data: { passwordHash } });
     await this.prisma.db.customerRefreshToken.updateMany({
       where: { customerId: customer.id, revokedAt: null },
       data: { revokedAt: new Date() },
