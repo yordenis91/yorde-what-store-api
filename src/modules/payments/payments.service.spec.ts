@@ -267,7 +267,7 @@ describe('PaymentsService.refundOrderPayment', () => {
 
     await service.refundOrderPayment(TENANT_ID, order);
 
-    expect(refund).toHaveBeenCalledWith('mp-1', null);
+    expect(refund).toHaveBeenCalledWith('mp-1');
   });
 
   it('does nothing for an order with no online charge to reverse', async () => {

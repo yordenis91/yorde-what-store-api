@@ -218,6 +218,28 @@ export class TenantsService {
     const select = { id: true, provider: true, isEnabled: true, createdAt: true, updatedAt: true } as const;
     const { credentials } = dto;
 
+    // MercadoPago is charged through the platform's own account (its webhook is
+    // signed with the platform secret, so a tenant's own token could never be
+    // confirmed). There is nothing for a tenant to configure beyond the switch.
+    if (dto.provider === 'MERCADOPAGO') {
+      if (credentials !== undefined) {
+        throw new BadRequestException('MercadoPago uses the platform account; per-store credentials are not accepted');
+      }
+      if (dto.isEnabled && !this.config.get<string>('mercadoPago.accessToken')) {
+        throw new BadRequestException('MercadoPago is not available on this platform');
+      }
+      if (dto.isEnabled && !existing?.isEnabled) {
+        await this.plansService.assertFulfillmentMethodAllowed(tenantId, dto.provider);
+      }
+      return this.prisma.db.tenantPaymentSetting.upsert({
+        where: { tenantId_provider: { tenantId, provider: dto.provider } },
+        // `{}` also scrubs any token a tenant saved before this became platform-only.
+        create: { tenantId, provider: dto.provider, credentials: {}, isEnabled: dto.isEnabled },
+        update: { credentials: {}, isEnabled: dto.isEnabled },
+        select,
+      });
+    }
+
     // Same off → on rule as update(): re-saving an already enabled provider
     // after a downgrade is not blocked, switching a locked one on is.
     if (dto.isEnabled && !existing?.isEnabled) {
@@ -265,6 +287,8 @@ export class TenantsService {
     provider: 'STRIPE' | 'MERCADOPAGO' | 'ZELLE',
     client: Pick<Prisma.TransactionClient, 'tenantPaymentSetting'> = this.prisma.db,
   ) {
+    // Charged through the platform account — a tenant has no credentials of its own.
+    if (provider === 'MERCADOPAGO') return null;
     const setting = await client.tenantPaymentSetting.findUnique({
       where: { tenantId_provider: { tenantId, provider: provider as any } },
     });

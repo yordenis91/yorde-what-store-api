@@ -211,11 +211,9 @@ export class PaymentsService {
     this.assertPayable(order);
     await this.assertRedirectUrlsAllowed(tenantId, urls);
 
-    const credentials = await this.tenantsService.getDecryptedCredentials(tenantId, 'MERCADOPAGO');
-
     const result = await this.mercadoPagoAdapter.createCheckout(
       this.checkoutContext(tenantId, order),
-      credentials,
+      null,
       urls,
     );
 
@@ -289,9 +287,8 @@ export class PaymentsService {
         return false;
       });
       if (refundNeeded) {
-        const credentials = await this.tenantsService.getDecryptedCredentials(tenantId, 'MERCADOPAGO');
         try {
-          await this.mercadoPagoAdapter.refund(String(payment.id), credentials);
+          await this.mercadoPagoAdapter.refund(String(payment.id));
         } catch {
           this.logger.error(`Automatic refund of MercadoPago payment ${dataId} for cancelled order ${orderId} failed; refund manually`);
         }
@@ -308,9 +305,8 @@ export class PaymentsService {
       return;
     }
     if (order.fulfillmentMethod === 'MERCADOPAGO' && order.mercadoPagoPaymentId) {
-      const credentials = await this.tenantsService.getDecryptedCredentials(tenantId, 'MERCADOPAGO');
       try {
-        await this.mercadoPagoAdapter.refund(order.mercadoPagoPaymentId, credentials);
+        await this.mercadoPagoAdapter.refund(order.mercadoPagoPaymentId);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         this.logger.warn(`MercadoPago refund failed for payment ${order.mercadoPagoPaymentId}: ${message}`);
