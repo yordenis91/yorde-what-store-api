@@ -173,6 +173,28 @@ describe('TenantsService plan restrictions', () => {
   });
 });
 
+describe('TenantsService.update — write-only secrets', () => {
+  it('clears the Telegram token and the SMTP password on an explicit null, instead of failing to encrypt it', async () => {
+    const { service, update } = buildService();
+
+    await service.update(TENANT_ID, { telegramBotToken: null as never, smtpPassword: null as never });
+
+    const saved = update.mock.calls[0][0].data;
+    expect(saved.telegramBotToken).toBeNull();
+    expect(saved.smtpPassword).toBeNull();
+  });
+
+  it('leaves them untouched when omitted', async () => {
+    const { service, update } = buildService();
+
+    await service.update(TENANT_ID, { tagline: 'hi' });
+
+    const saved = update.mock.calls[0][0].data;
+    expect(saved).not.toHaveProperty('telegramBotToken');
+    expect(saved).not.toHaveProperty('smtpPassword');
+  });
+});
+
 describe('TenantsService — MercadoPago runs on the platform account', () => {
   it('rejects a store-supplied MercadoPago token', async () => {
     const { service, paymentUpsert } = buildService();
