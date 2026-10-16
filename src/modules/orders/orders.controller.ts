@@ -21,7 +21,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { memoryStorage } from 'multer';
-import { Observable, map } from 'rxjs';
+import { Observable, exhaustMap, filter, from, interval, map, takeUntil } from 'rxjs';
 import { AuthenticatedUser, CurrentTenantId, CurrentUser, Public, Roles } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
 import { CurrentCustomerId } from '../customers/decorators/current-customer-id.decorator';
@@ -146,6 +146,8 @@ export class OrdersController {
    * data }` envelope — a CSV download needs the raw file body, not JSON.
    * Registered before `:id` for the same reason as the invoice route below.
    */
+  // Bulk export of customer personal data.
+  @Audit({ action: 'order.export', entityType: 'Order' })
   @Roles('OWNER')
   @Get('export')
   async exportCsv(@CurrentTenantId() tenantId: string, @Query() query: OrderQueryDto, @Res() res: Response) {
@@ -162,8 +164,18 @@ export class OrdersController {
    * would otherwise be swallowed as an :id.
    */
   @Sse('events')
-  streamEvents(@CurrentTenantId() tenantId: string): Observable<MessageEvent> {
-    return this.ordersService.streamEvents(tenantId).pipe(map((event) => ({ type: event.type, data: event.order })));
+  streamEvents(@CurrentTenantId() tenantId: string, @CurrentUser() user: AuthenticatedUser): Observable<MessageEvent> {
+    // The connection was authorised once, when it opened, and then stays open for as long as the
+    // tab does. Re-check on a timer so a removed member, a deactivated user or a suspended store
+    // stops receiving customer names and totals instead of keeping the stream until they close it.
+    const revoked$ = interval(this.ordersService.streamRecheckMs()).pipe(
+      exhaustMap(() => from(this.ordersService.isStreamAllowed(user, tenantId))),
+      filter((allowed) => !allowed),
+    );
+    return this.ordersService.streamEvents(tenantId).pipe(
+      takeUntil(revoked$),
+      map((event) => ({ type: event.type, data: event.order })),
+    );
   }
 
   @Get(':id')
@@ -171,7 +183,7 @@ export class OrdersController {
     return this.ordersService.findOne(tenantId, id);
   }
 
-  @Audit({ action: 'order.update', entityType: 'Order' })
+  @Audit({ action: 'order.update', entityType: 'Order', body: 'keys' })
   @Patch(':id')
   update(@CurrentTenantId() tenantId: string, @Param('id') id: string, @Body() dto: UpdateOrderDto) {
     return this.ordersService.updateDetails(tenantId, id, dto);

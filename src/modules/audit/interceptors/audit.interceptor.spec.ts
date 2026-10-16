@@ -143,4 +143,63 @@ describe('AuditInterceptor', () => {
       error: done,
     });
   });
+
+  it('attributes an impersonated action to the real person and says who they were acting as', (done) => {
+    const { interceptor, context, next, record } = buildInterceptor({
+      auditOptions: { action: 'order.update', entityType: 'Order' },
+      request: {
+        user: {
+          id: 'owner-1',
+          email: 'owner@store.test',
+          globalRole: 'USER',
+          tenantRole: 'OWNER',
+          impersonatedBy: 'admin-9',
+        },
+      },
+    });
+
+    interceptor.intercept(context, next).subscribe(() => {
+      const entry = record.mock.calls[0][0];
+      expect(entry).toMatchObject({ actorId: 'admin-9', actorRole: 'SUPER_ADMIN' });
+      expect(entry.actorEmail).toBeUndefined();
+      expect(entry.metadata.impersonating).toEqual({
+        userId: 'owner-1',
+        email: 'owner@store.test',
+        tenantRole: 'OWNER',
+      });
+      done();
+    });
+  });
+
+  it("in 'keys' mode logs which fields changed, not the customer data in them", (done) => {
+    const { interceptor, context, next, record } = buildInterceptor({
+      auditOptions: { action: 'order.update', entityType: 'Order', body: 'keys' },
+      request: {
+        body: { customerName: 'Ana Pérez', customerPhone: '+1 555 0100', shippingAddress: { line1: '1 Main St' } },
+      },
+    });
+
+    interceptor.intercept(context, next).subscribe(() => {
+      const logged = JSON.stringify(record.mock.calls[0][0].metadata);
+      expect(logged).toContain('customerName');
+      expect(logged).not.toContain('Ana');
+      expect(logged).not.toContain('555');
+      expect(logged).not.toContain('Main St');
+      done();
+    });
+  });
+
+  it("keeps only the fields listed in 'include' verbatim", (done) => {
+    const { interceptor, context, next, record } = buildInterceptor({
+      auditOptions: { action: 'backup.restore', entityType: 'Backup', body: 'keys', include: ['key'] },
+      request: { body: { key: 'postgres/yws-1.dump', targetDatabaseUrl: 'postgresql://u:s3cr3t@host:5432/db' } },
+    });
+
+    interceptor.intercept(context, next).subscribe(() => {
+      const metadata = record.mock.calls[0][0].metadata;
+      expect(metadata.request.values).toEqual({ key: 'postgres/yws-1.dump' });
+      expect(JSON.stringify(metadata)).not.toContain('s3cr3t');
+      done();
+    });
+  });
 });

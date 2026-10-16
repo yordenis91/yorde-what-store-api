@@ -1,10 +1,22 @@
-import { BadRequestException, Body, Controller, Get, Post, Req, Res, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Post,
+  Req,
+  Res,
+  UnauthorizedException,
+  UseInterceptors,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 import { Public, CurrentUser, AuthenticatedUser } from '../../common/decorators';
 import { respondMobileRefresh } from '../../common/utils/mobile-refresh-response.util';
+import { Audit } from '../audit/decorators/audit.decorator';
+import { AuditInterceptor } from '../audit/interceptors/audit.interceptor';
 import { AuthService, TokenPair } from './auth.service';
 import {
   RegisterDto,
@@ -23,6 +35,7 @@ const REFRESH_COOKIE = 'refresh_token';
 const AUTH_THROTTLE = { default: { limit: 5, ttl: 60_000 } };
 
 @ApiTags('auth')
+@UseInterceptors(AuditInterceptor)
 @Controller('auth')
 export class AuthController {
   constructor(
@@ -137,12 +150,14 @@ export class AuthController {
     return this.authService.setupTwoFactor(user.id);
   }
 
+  @Audit({ action: 'auth.2fa_enable', entityType: 'User', body: 'keys' })
   @Post('2fa/enable')
   async enableTwoFactor(@CurrentUser() user: AuthenticatedUser, @Body() dto: EnableTwoFactorDto, @Req() req: Request) {
     if (user.impersonatedBy) throw new UnauthorizedException('Not allowed while impersonating');
     return this.authService.enableTwoFactor(user.id, dto, req.cookies?.[REFRESH_COOKIE]);
   }
 
+  @Audit({ action: 'auth.2fa_disable', entityType: 'User', body: 'keys' })
   @Post('2fa/disable')
   async disableTwoFactor(@CurrentUser() user: AuthenticatedUser, @Body() dto: EnableTwoFactorDto, @Req() req: Request) {
     if (user.impersonatedBy) throw new UnauthorizedException('Not allowed while impersonating');

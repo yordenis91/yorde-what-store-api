@@ -1,11 +1,14 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { CurrentTenantId, Public, Roles } from '../../common/decorators';
 import { TenantRequiredGuard } from '../../common/guards';
+import { Audit } from '../audit/decorators/audit.decorator';
+import { AuditInterceptor } from '../audit/interceptors/audit.interceptor';
 import { PlansService } from './plans.service';
 import { CreatePlanDto, UpdatePlanDto, SubscribeDto, RequestUpgradeDto } from './dto';
 
 @ApiTags('plans')
+@UseInterceptors(AuditInterceptor)
 @Controller('plans')
 export class PlansController {
   constructor(private readonly plansService: PlansService) {}
@@ -22,18 +25,21 @@ export class PlansController {
     return this.plansService.listAll();
   }
 
+  @Audit({ action: 'plan.create', entityType: 'Plan' })
   @Roles('SUPER_ADMIN')
   @Post()
   create(@Body() dto: CreatePlanDto) {
     return this.plansService.create(dto);
   }
 
+  @Audit({ action: 'plan.update', entityType: 'Plan' })
   @Roles('SUPER_ADMIN')
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdatePlanDto) {
     return this.plansService.update(id, dto);
   }
 
+  @Audit({ action: 'plan.delete', entityType: 'Plan' })
   @Roles('SUPER_ADMIN')
   @Delete(':id')
   remove(@Param('id') id: string) {
@@ -46,12 +52,14 @@ export class PlansController {
     return this.plansService.listUpgradeRequests();
   }
 
+  @Audit({ action: 'plan.upgrade_approve', entityType: 'Subscription' })
   @Roles('SUPER_ADMIN')
   @Post(':id/approve-upgrade')
   approveUpgrade(@Param('id') subscriptionId: string) {
     return this.plansService.approveUpgrade(subscriptionId);
   }
 
+  @Audit({ action: 'plan.upgrade_reject', entityType: 'Subscription' })
   @Roles('SUPER_ADMIN')
   @Post(':id/reject-upgrade')
   rejectUpgrade(@Param('id') subscriptionId: string) {

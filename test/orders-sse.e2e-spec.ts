@@ -5,7 +5,7 @@ import { JwtService } from '@nestjs/jwt';
 import request from 'supertest';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { bootstrapTestApp } from './utils/bootstrap-app';
-import { seedProduct, seedTenant } from './utils/fixtures';
+import { seedLoginUser, seedProduct, seedTenant } from './utils/fixtures';
 
 /**
  * The live order-events stream is the one route in this app that has to stay
@@ -133,5 +133,58 @@ describe('Orders live events (e2e)', () => {
 
     streamB.close();
     void ownerA; // seeded only so tenantA has an owner; not used directly
+  });
+
+  describe('an open stream whose viewer loses access', () => {
+    /** Resolves true when the server ends the response, false if it is still open after `ms`. */
+    function endsWithin(tenantId: string, token: string, ms: number): Promise<boolean> {
+      return new Promise((resolve) => {
+        const req = http.get(`${baseUrl}/api/v1/orders/events?access_token=${token}&tenantId=${tenantId}`, (res) => {
+          res.on('data', () => undefined);
+          res.on('end', () => resolve(true));
+          res.on('close', () => resolve(true));
+        });
+        req.on('error', () => undefined);
+        setTimeout(() => {
+          req.destroy();
+          resolve(false);
+        }, ms);
+      });
+    }
+
+    beforeAll(() => {
+      process.env.ORDER_STREAM_RECHECK_MS = '300';
+    });
+    afterAll(() => {
+      delete process.env.ORDER_STREAM_RECHECK_MS;
+    });
+
+    it('is closed once the member is removed from the store', async () => {
+      const { tenant } = await seedTenant(prisma, { slug: 'sse-revoked' });
+      const staff = await seedLoginUser(prisma, { email: 'staff@sse.test', password: 'whatever-123' });
+      const member = await prisma.tenantMember.create({
+        data: { tenantId: tenant.id, userId: staff.id, role: 'STAFF' },
+      });
+      const token = jwt.sign({
+        sub: staff.id,
+        email: staff.email,
+        globalRole: 'USER',
+        tenantId: tenant.id,
+        tenantRole: 'STAFF',
+      });
+
+      const closed = endsWithin(tenant.id, token, 4000);
+      await new Promise((r) => setTimeout(r, 600)); // let it connect and survive a re-check
+      await prisma.tenantMember.update({ where: { id: member.id }, data: { isActive: false } });
+
+      expect(await closed).toBe(true);
+    });
+
+    it('stays open for a member who is still allowed', async () => {
+      const { tenant, owner } = await seedTenant(prisma, { slug: 'sse-allowed' });
+      const token = ownerToken(owner.id, owner.email, tenant.id);
+
+      expect(await endsWithin(tenant.id, token, 1500)).toBe(false);
+    });
   });
 });

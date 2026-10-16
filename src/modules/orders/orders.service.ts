@@ -74,6 +74,35 @@ export class OrdersService {
     private readonly plansService: PlansService,
   ) {}
 
+  /** How often an open order-events stream re-checks that its viewer is still allowed to see it. */
+  streamRecheckMs(): number {
+    return parseInt(process.env.ORDER_STREAM_RECHECK_MS ?? '60000', 10);
+  }
+
+  /**
+   * Whether `user` may still watch `tenantId`'s order stream. Uses the plain client: the stream
+   * is exempt from the request transaction, and none of these tables is tenant-scoped.
+   * A failed lookup keeps the stream (a database blip must not cut every dashboard off).
+   */
+  async isStreamAllowed(user: { id: string; impersonatedBy?: string }, tenantId: string): Promise<boolean> {
+    try {
+      const [account, tenant, membership] = await Promise.all([
+        this.prisma.user.findUnique({ where: { id: user.impersonatedBy ?? user.id }, select: { isActive: true } }),
+        this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { isActive: true } }),
+        // An impersonating platform admin has no membership; their own account is what is checked.
+        user.impersonatedBy
+          ? Promise.resolve(true)
+          : this.prisma.tenantMember.findFirst({
+              where: { userId: user.id, tenantId, isActive: true },
+              select: { id: true },
+            }),
+      ]);
+      return Boolean(account?.isActive && tenant?.isActive && membership);
+    } catch {
+      return true;
+    }
+  }
+
   /** Live-notification endpoint for the admin dashboard's SSE stream. */
   streamEvents(tenantId: string) {
     return this.orderEvents.stream(tenantId);
