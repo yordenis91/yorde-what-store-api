@@ -58,8 +58,9 @@ tenant admin panel, and the Super Admin platform console.
 **Tenant administration**
 - Staff management with role-based access (`OWNER` / `STAFF`) and email
   invitations.
-- Encrypted-at-rest payment gateway credentials (Stripe, MercadoPago) and
-  optional per-tenant SMTP configuration.
+- Encrypted-at-rest payment credentials (Stripe, Zelle) and optional per-tenant
+  SMTP configuration. MercadoPago runs on the platform's own account (stores only
+  switch it on).
 - Sales/orders dashboard with date-range analytics.
 
 **Super Admin platform**
@@ -170,7 +171,7 @@ Redis-backed BullMQ queues, so nothing here blocks a request:
 
 | Queue | Processor | Does what |
 | --- | --- | --- |
-| `email` | `EmailProcessor` | Transactional email (password reset, staff invite, receipts). Resolves per-tenant SMTP → platform fallback SMTP → logs instead of sending if neither is configured. |
+| `email` | `EmailProcessor` | Transactional email (password reset, staff invite, receipts). Receipts resolve per-tenant SMTP → platform SMTP → log instead of sending if neither is configured. Mail that carries a credential link (staff invites, password resets) always goes through the **platform** SMTP, never a tenant's. |
 | `invoice-pdf` | `InvoicePdfProcessor` | Renders a PDF invoice for a confirmed order. |
 | `inventory-sync` | `InventorySyncProcessor` | Decrements product/variant stock off the request path once an order is confirmed. |
 | `order-notification` | `OrderNotificationProcessor` | Sends a Telegram message to the tenant's configured chat on new orders. |
@@ -301,7 +302,7 @@ copy it to `.env` and fill in real secrets before running anything beyond
 | **2FA** | | |
 | `TOTP_ISSUER` | `YWS` | |
 | **Encryption** | | |
-| `ENCRYPTION_KEY` | falls back to `JWT_SECRET`, then a dev-only literal | Encrypts tenant payment credentials and bot tokens at rest (AES-256-GCM). **Set explicitly in production** — losing or rotating it silently makes existing encrypted data undecryptable. |
+| `ENCRYPTION_KEY` | **required** (the app will not boot without it) | Encrypts tenant payment credentials, SMTP passwords and bot tokens at rest (AES-256-GCM). In production placeholder values, values under 32 characters and values equal to a `JWT_*` secret are refused. Losing or rotating it makes existing encrypted data undecryptable. |
 | **Stripe** | | |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | — | Optional; checkout fails per-tenant if unset. |
 | **MercadoPago** | | |
