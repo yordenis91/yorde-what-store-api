@@ -257,7 +257,7 @@ export class PlansService {
       !isLapsed(subscription, now);
     const from = isRenewal ? subscription.expiresAt! : now;
 
-    return this.client.subscription.update({
+    const approved = await this.client.subscription.update({
       where: { id: subscriptionId },
       data: {
         planId: plan.id,
@@ -269,6 +269,11 @@ export class PlansService {
         expiryNoticesSent: [],
       },
     });
+    // Moving to a plan with a lower product limit (the platform approved it, so it must not fail
+    // here) leaves the store over it. Reconcile exactly as an automatic downgrade does: keep the
+    // oldest products live, unpublish the rest. Read after the update, so the new limit applies.
+    if (plan.maxProducts !== -1) await this.hideProductsOverLimit(subscription.tenantId);
+    return approved;
   }
 
   /** Declines a request (payment never arrived, wrong amount…): the store keeps its current plan. */

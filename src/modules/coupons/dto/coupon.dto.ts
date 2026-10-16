@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsDateString, IsEnum, IsInt, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { IsBoolean, IsDateString, IsEnum, IsInt, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
 import { DiscountType } from '@prisma/client';
 
 const emptyToUndefined = ({ value }: { value: unknown }) => (value === '' ? undefined : value);
@@ -16,12 +16,14 @@ export class CreateCouponDto {
 
   @IsNumber()
   @Min(0)
+  @Max(1_000_000_000)
   discountValue: number;
 
   @IsOptional()
   @Transform(emptyToUndefined)
   @IsInt()
   @Min(1)
+  @Max(1_000_000_000)
   usageLimit?: number;
 
   @IsOptional()
@@ -46,12 +48,14 @@ export class UpdateCouponDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(1_000_000_000)
   discountValue?: number;
 
   @IsOptional()
   @Transform(emptyToUndefined)
   @IsInt()
   @Min(1)
+  @Max(1_000_000_000)
   /** null removes the limit. */
   usageLimit?: number | null;
 

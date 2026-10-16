@@ -1,4 +1,5 @@
 import { assertSafeImageUrl } from '../uploads/upload-url.util';
+import { deleteUploadedFile } from '../uploads/uploads.util';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import {
@@ -219,17 +220,22 @@ export class OrdersService {
     if (order.paymentStatus === 'PAID') {
       throw new ConflictException('This order has already been paid');
     }
+    return order;
   }
 
   async submitPaymentProof(tenantId: string, orderId: string, dto: PaymentProofDto) {
     assertSafeImageUrl(tenantId, dto.proofUrl, 'proofUrl');
-    await this.assertAcceptsPaymentProof(tenantId, orderId);
+    const before = await this.assertAcceptsPaymentProof(tenantId, orderId);
 
     const updated = await this.prisma.db.order.update({
       where: { id: orderId },
       data: { paymentProofUrl: dto.proofUrl, paymentReference: dto.reference },
       include: ORDER_INCLUDE,
     });
+    // The route is public: without this every resubmission leaves a permanent file behind.
+    if (before.paymentProofUrl && before.paymentProofUrl !== dto.proofUrl) {
+      await deleteUploadedFile(before.paymentProofUrl, tenantId);
+    }
     this.orderEvents.emit(tenantId, this.toOrderEvent('order.status_updated', updated));
     return updated;
   }

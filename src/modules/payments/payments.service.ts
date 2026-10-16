@@ -9,6 +9,7 @@ import { TenantsService } from '../tenants/tenants.service';
 import { StripeAdapter } from './adapters/stripe.adapter';
 import { MercadoPagoAdapter } from './adapters/mercadopago.adapter';
 import { INVOICE_PDF_QUEUE } from '../../queue/queue.constants';
+import { deleteUploadedFile } from '../uploads/uploads.util';
 import { toMinorUnits } from './currency.util';
 import { PLAN_CHECKOUT_KIND } from '../billing/billing.constants';
 
@@ -420,9 +421,11 @@ export class PaymentsService {
       throw new BadRequestException('Only Zelle orders can be rejected this way');
     }
 
-    return this.prisma.db.order.update({
+    const updated = await this.prisma.db.order.update({
       where: { id: orderId },
       data: { paymentProofUrl: null, paymentReference: null },
     });
+    await deleteUploadedFile(order.paymentProofUrl, tenantId);
+    return updated;
   }
 }
