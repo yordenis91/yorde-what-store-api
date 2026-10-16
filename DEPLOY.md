@@ -33,14 +33,19 @@ las imágenes de todas las tiendas**.
 
 ### Variables de entorno
 
-Todas las de `.env.example`. Tres merecen atención especial en producción:
+Todas las de `.env.example`. Para el recorrido completo antes de salir a producción
+(rol de base de datos, webhooks, alertas, pruebas en staging), usa
+[`PRODUCTION_CHECKLIST.md`](PRODUCTION_CHECKLIST.md). Estas merecen atención especial:
 
-- **`ENCRYPTION_KEY`** — cifra en reposo las credenciales de pago y los tokens de
-  bot de cada tenant (AES-256-GCM). Si no la defines, cae a `JWT_SECRET` y, si
-  tampoco existe, a la cadena literal `'insecure-dev-key'`
-  (`src/config/index.ts`). Cambiarla o perderla deja esos datos indescifrables:
-  genérala una vez con `openssl rand -hex 32` y guárdala en un gestor de
-  contraseñas.
+- **`ENCRYPTION_KEY`** — cifra en reposo las credenciales de pago, las contraseñas
+  SMTP y los tokens de bot de cada tenant (AES-256-GCM). Es obligatoria: sin ella
+  la API no arranca. En producción además se rechazan los valores de ejemplo, los
+  de menos de 32 caracteres y los que repiten un secreto `JWT_*`. Cambiarla o
+  perderla deja esos datos indescifrables: genérala una vez con
+  `openssl rand -hex 32` y guárdala en un gestor de contraseñas.
+- **Secretos `JWT_*`** — cuatro, todos distintos entre sí y de al menos 32
+  caracteres (`openssl rand -hex 32` para cada uno). Con `NODE_ENV=production` la
+  API se niega a arrancar si alguno es un valor de ejemplo o está repetido.
 - **`CORS_ORIGINS`** — si queda vacía, la API **refleja cualquier origen** con
   credenciales activadas (`src/main.ts:31`). Defínela siempre en producción.
 - **`PUBLIC_WEB_URL`** — la URL pública de la web (p. ej.
