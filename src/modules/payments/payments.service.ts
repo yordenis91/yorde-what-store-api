@@ -9,6 +9,7 @@ import { TenantsService } from '../tenants/tenants.service';
 import { StripeAdapter } from './adapters/stripe.adapter';
 import { MercadoPagoAdapter } from './adapters/mercadopago.adapter';
 import { INVOICE_PDF_QUEUE } from '../../queue/queue.constants';
+import { afterCommit } from '../../prisma/after-commit';
 import { deleteUploadedFile } from '../uploads/uploads.util';
 import { toMinorUnits } from './currency.util';
 import { PLAN_CHECKOUT_KIND } from '../billing/billing.constants';
@@ -213,7 +214,7 @@ export class PaymentsService {
           const winner = await tx.order.findUnique({ where: { id: orderId } });
           return Boolean(paymentIntentId && winner?.stripePaymentIntentId !== paymentIntentId);
         }
-        await this.invoiceQueue.add('generate-invoice', { tenantId, orderId });
+        afterCommit(() => this.invoiceQueue.add('generate-invoice', { tenantId, orderId }));
         return false;
       });
       if (refundNeeded && paymentIntentId) {
@@ -339,7 +340,7 @@ export class PaymentsService {
           const winner = await tx.order.findUnique({ where: { id: orderId } });
           return winner?.mercadoPagoPaymentId !== String(payment.id);
         }
-        await this.invoiceQueue.add('generate-invoice', { tenantId, orderId });
+        afterCommit(() => this.invoiceQueue.add('generate-invoice', { tenantId, orderId }));
         return false;
       });
       if (refundNeeded) {
@@ -375,7 +376,7 @@ export class PaymentsService {
 
   /** Re-renders an order's PDF invoice, for when its totals changed after it was generated. */
   async requeueInvoice(tenantId: string, orderId: string) {
-    await this.invoiceQueue.add('generate-invoice', { tenantId, orderId });
+    afterCommit(() => this.invoiceQueue.add('generate-invoice', { tenantId, orderId }));
   }
 
   /** Rejects placing a Zelle order at all if the store never set up a recipient account — otherwise a customer would see payment instructions for an account that doesn't exist. */
@@ -409,7 +410,7 @@ export class PaymentsService {
       where: { id: orderId },
       data: { paymentStatus: 'PAID', status: 'CONFIRMED' },
     });
-    await this.invoiceQueue.add('generate-invoice', { tenantId, orderId: updated.id });
+    afterCommit(() => this.invoiceQueue.add('generate-invoice', { tenantId, orderId: updated.id }));
     return updated;
   }
 

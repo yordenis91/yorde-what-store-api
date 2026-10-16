@@ -3,6 +3,7 @@ process.env.STRIPE_WEBHOOK_SECRET = 'whsec_e2e_test_secret';
 
 import { getQueueToken } from '@nestjs/bullmq';
 import type { INestApplication } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import type { Queue } from 'bullmq';
 import request from 'supertest';
 import Stripe from 'stripe';
@@ -16,6 +17,7 @@ import { seedOrder, seedTenant } from './utils/fixtures';
 describe('Payment webhooks and checkout guards (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
+  let jwt: JwtService;
   let invoiceAdd: jest.SpyInstance;
   let stripeRefund: jest.SpyInstance;
   const http = () => request(app.getHttpServer());
@@ -23,6 +25,7 @@ describe('Payment webhooks and checkout guards (e2e)', () => {
   beforeAll(async () => {
     app = await bootstrapTestApp();
     prisma = app.get(PrismaService);
+    jwt = app.get(JwtService);
     // Nothing here should render a PDF; only count how often it is asked to.
     invoiceAdd = jest.spyOn(app.get<Queue>(getQueueToken(INVOICE_PDF_QUEUE)), 'add').mockResolvedValue({} as never);
     stripeRefund = jest.spyOn(app.get(StripeAdapter), 'refund').mockResolvedValue(undefined);
@@ -171,6 +174,52 @@ describe('Payment webhooks and checkout guards (e2e)', () => {
       await sendStripeEvent(tenant.id, order.id, {}, 't=1,v1=deadbeef').expect(400);
 
       expect((await orderRow(tenant.id, order.id)).paymentStatus).toBe('PENDING');
+    });
+  });
+
+  describe('invoice job timing', () => {
+    /** What the order looks like to someone reading it at the moment the job is queued. */
+    function recordOrderWhenQueued(tenantId: string, orderId: string) {
+      const seen: string[] = [];
+      invoiceAdd.mockImplementationOnce((async () => {
+        // A separate read: it can only see the payment if that transaction has already committed.
+        seen.push((await orderRow(tenantId, orderId)).paymentStatus);
+      }) as never);
+      return seen;
+    }
+
+    it('queues the invoice after a webhook has committed the payment, not before', async () => {
+      const { tenant } = await seedTenant(prisma, { slug: 'timing-webhook' });
+      const order = await seedOrder(prisma, tenant.id);
+      const seen = recordOrderWhenQueued(tenant.id, order.id);
+
+      await sendStripeEvent(tenant.id, order.id).expect(201);
+
+      expect(seen).toEqual(['PAID']);
+    });
+
+    it('queues the invoice after the owner confirms a Zelle payment has committed', async () => {
+      const { tenant, owner } = await seedTenant(prisma, { slug: 'timing-zelle' });
+      const order = await seedOrder(prisma, tenant.id, { fulfillmentMethod: 'ZELLE' });
+      await prisma.withTenant(tenant.id, (tx) =>
+        tx.order.update({ where: { id: order.id }, data: { paymentProofUrl: '/uploads/x/proof.webp' } }),
+      );
+      const seen = recordOrderWhenQueued(tenant.id, order.id);
+      const token = jwt.sign({
+        sub: owner.id,
+        email: owner.email,
+        globalRole: 'USER',
+        tenantId: tenant.id,
+        tenantRole: 'OWNER',
+      });
+
+      await http()
+        .post(`/api/v1/orders/${order.id}/confirm-zelle-payment`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Tenant-ID', tenant.id)
+        .expect(201);
+
+      expect(seen).toEqual(['PAID']);
     });
   });
 

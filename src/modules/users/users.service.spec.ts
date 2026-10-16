@@ -50,11 +50,12 @@ function buildService(
 
   // Inside a request everything goes through the tenant-scoped client (`db`): a second, root
   // connection held while the request's own transaction is open can exhaust the pool.
+  const deviceTokenUpdateMany = jest.fn().mockResolvedValue({ count: 0 });
   const delegates = {
     tenantMember: { findMany, findFirst, update, findUnique: memberFindUnique, create: memberCreate },
     user: { findUnique: userFindUnique, create: userCreate },
     passwordResetToken: { create: resetTokenCreate, updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
-    deviceToken: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    deviceToken: { updateMany: deviceTokenUpdateMany },
     mobileRefreshToken: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
   };
   const prisma = {
@@ -75,6 +76,7 @@ function buildService(
     userFindUnique,
     userCreate,
     resetTokenCreate,
+    deviceTokenUpdateMany,
     emailQueue,
   };
 }
@@ -120,6 +122,28 @@ describe('UsersService tenant isolation', () => {
 
     await expect(service.updateMember(TENANT_A, 'm-other', { isActive: false })).rejects.toThrow(NotFoundException);
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it("updateMember revokes the member's push devices when it deactivates them, like removing does", async () => {
+    const { service, deviceTokenUpdateMany } = buildService({
+      members: [{ id: 'm1', tenantId: TENANT_A, userId: 'user-1', isActive: true, role: 'STAFF' }],
+    });
+
+    await service.updateMember(TENANT_A, 'm1', { isActive: false });
+
+    expect(deviceTokenUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ userId: 'user-1', tenantId: TENANT_A }) }),
+    );
+  });
+
+  it('updateMember leaves devices alone for an edit that does not deactivate', async () => {
+    const { service, deviceTokenUpdateMany } = buildService({
+      members: [{ id: 'm1', tenantId: TENANT_A, userId: 'user-1', isActive: true, role: 'STAFF' }],
+    });
+
+    await service.updateMember(TENANT_A, 'm1', { permissions: ['orders'] });
+
+    expect(deviceTokenUpdateMany).not.toHaveBeenCalled();
   });
 
   it('removeMember 404s on a member id that exists but belongs to a different tenant', async () => {
