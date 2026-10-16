@@ -124,4 +124,19 @@ describe('validateEnv', () => {
       ).not.toThrow();
     });
   });
+
+  describe('STOREFRONT_ROOT_DOMAIN', () => {
+    it('accepts a bare domain, or none at all', () => {
+      expect(() => validateEnv({ ...VALID_ENV, STOREFRONT_ROOT_DOMAIN: 'midominio.com' })).not.toThrow();
+      expect(() => validateEnv({ ...VALID_ENV, STOREFRONT_ROOT_DOMAIN: '' })).not.toThrow();
+      expect(() => validateEnv({ ...VALID_ENV })).not.toThrow();
+    });
+
+    it.each(['https://midominio.com', 'midominio.com:3000', 'midominio.com/tiendas', 'mi dominio.com'])(
+      'refuses %s, which could never match a hostname',
+      (value) => {
+        expect(() => validateEnv({ ...VALID_ENV, STOREFRONT_ROOT_DOMAIN: value })).toThrow(/STOREFRONT_ROOT_DOMAIN/);
+      },
+    );
+  });
 });

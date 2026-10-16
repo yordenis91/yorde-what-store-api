@@ -54,6 +54,18 @@ export function validateEnv(config: Record<string, unknown>): Record<string, unk
     );
   }
 
+  // A scheme, port or path here would make every subdomain return URL fail to match.
+  const rootDomain = config.STOREFRONT_ROOT_DOMAIN;
+  if (
+    typeof rootDomain === 'string' &&
+    rootDomain.trim() !== '' &&
+    !/^\.?[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i.test(rootDomain.trim())
+  ) {
+    throw new Error(
+      `STOREFRONT_ROOT_DOMAIN must be a bare domain (e.g. midominio.com), without scheme, port or path; got "${rootDomain}".`,
+    );
+  }
+
   // Throws on an unsafe value ("true", "*") so a bad TRUST_PROXY stops the boot.
   parseTrustProxy(typeof config.TRUST_PROXY === 'string' ? config.TRUST_PROXY : undefined);
 

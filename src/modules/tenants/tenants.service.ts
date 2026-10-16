@@ -173,11 +173,12 @@ export class TenantsService {
     // string clears it.
     if (smtpPassword !== undefined) {
       const secret = this.config.get<string>('security.encryptionKey')!;
-      data.smtpPassword = smtpPassword === '' ? null : encryptSecret(smtpPassword, secret);
+      data.smtpPassword = smtpPassword === '' || smtpPassword === null ? null : encryptSecret(smtpPassword, secret);
     }
     if (telegramBotToken !== undefined) {
       const secret = this.config.get<string>('security.encryptionKey')!;
-      data.telegramBotToken = telegramBotToken === '' ? null : encryptSecret(telegramBotToken, secret);
+      data.telegramBotToken =
+        telegramBotToken === '' || telegramBotToken === null ? null : encryptSecret(telegramBotToken, secret);
     }
     const previous = await this.prisma.db.tenant.findUnique({
       where: { id: tenantId },

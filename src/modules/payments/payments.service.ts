@@ -12,6 +12,7 @@ import { INVOICE_PDF_QUEUE } from '../../queue/queue.constants';
 import { afterCommit } from '../../prisma/after-commit';
 import { deleteUploadedFile } from '../uploads/uploads.util';
 import { toMinorUnits } from './currency.util';
+import { isAllowedReturnUrl } from './return-url.util';
 import { PLAN_CHECKOUT_KIND } from '../billing/billing.constants';
 
 /**
@@ -51,37 +52,17 @@ export class PaymentsService {
    * that returns the payer to an attacker's page.
    */
   private async assertRedirectUrlsAllowed(tenantId: string, urls: { successUrl: string; cancelUrl: string }) {
-    const corsOrigins = this.config.get<string[]>('app.corsOrigins') ?? [];
     const tenant = await this.prisma.db.tenant.findUniqueOrThrow({
       where: { id: tenantId },
-      select: { subdomain: true, customDomain: true },
+      select: { slug: true, subdomain: true, customDomain: true },
     });
-    const baseHost = this.platformHost(corsOrigins);
-    const allowed = (raw: string) => {
-      let url: URL;
-      try {
-        url = new URL(raw);
-      } catch {
-        return false;
-      }
-      if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
-      if (corsOrigins.includes(url.origin)) return true;
-      if (tenant.customDomain && url.hostname === tenant.customDomain) return true;
-      // `<subdomain>.<platform host>` only. A bare prefix test would accept `shop.evil.com`.
-      return Boolean(tenant.subdomain && baseHost) && url.hostname === `${tenant.subdomain}.${baseHost}`;
+    const rules = {
+      corsOrigins: this.config.get<string[]>('app.corsOrigins') ?? [],
+      rootDomain: this.config.get<string | null>('app.storefrontRootDomain') ?? null,
+      ...tenant,
     };
-    if (!allowed(urls.successUrl) || !allowed(urls.cancelUrl)) {
+    if (!isAllowedReturnUrl(urls.successUrl, rules) || !isAllowedReturnUrl(urls.cancelUrl, rules)) {
       throw new BadRequestException('Redirect URL is not allowed for this store');
-    }
-  }
-
-  /** Hostname of the web client — the parent domain store subdomains hang off (`shop.<this>`). */
-  private platformHost(corsOrigins: string[]): string | null {
-    const candidate = this.config.get<string | null>('app.publicWebUrl') ?? corsOrigins[0];
-    try {
-      return candidate ? new URL(candidate).hostname.replace(/^www\./, '') : null;
-    } catch {
-      return null;
     }
   }
 

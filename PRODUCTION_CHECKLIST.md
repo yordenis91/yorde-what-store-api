@@ -62,6 +62,9 @@ openssl rand -hex 32
 - [ ] `NODE_ENV=production`
 - [ ] `CORS_ORIGINS` con la lista exacta de orígenes de la web (vacía = refleja cualquier origen con credenciales).
 - [ ] `PUBLIC_WEB_URL=https://tu-dominio` (todos los enlaces de los correos se construyen con ella).
+- [ ] `STOREFRONT_ROOT_DOMAIN=midominio.com` **si las tiendas viven en subdominios** (`acme.midominio.com`), con el mismo
+      valor que `VITE_STOREFRONT_ROOT_DOMAIN` de la web. Sin ella, el checkout con tarjeta rechaza (400) las URLs de
+      retorno de una tienda en subdominio. Déjala sin definir si solo se usa `/store/<slug>`.
 - [ ] `TRUST_PROXY` = número de proxies delante de la API (p. ej. `2` con Cloudflare + Traefik). Sin ella, todos los
       visitantes cuentan como una sola IP para los límites. `true` y `*` se rechazan.
 - [ ] `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `MAIL_FROM` — SMTP **de la plataforma**. Por él salen las
