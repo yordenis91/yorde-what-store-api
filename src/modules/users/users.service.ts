@@ -97,7 +97,23 @@ export class UsersService {
     if (!member) throw new NotFoundException('Member not found');
     if (member.role === 'OWNER') throw new ConflictException('Cannot modify the store owner membership');
 
-    return this.prisma.db.tenantMember.update({ where: { id: memberId }, data: dto as any });
+    const updated = await this.prisma.db.tenantMember.update({ where: { id: memberId }, data: dto as any });
+    // Deactivating is removing, as far as access goes: same cleanup.
+    if (dto.isActive === false) await this.revokeDeviceAccess(member.userId, tenantId);
+    return updated;
+  }
+
+  /** Access/refresh tokens already fail the live membership check; this also stops pushes and mobile sessions. */
+  private async revokeDeviceAccess(userId: string, tenantId: string) {
+    const now = new Date();
+    await this.prisma.db.deviceToken.updateMany({
+      where: { userId, tenantId, revokedAt: null },
+      data: { revokedAt: now },
+    });
+    await this.prisma.db.mobileRefreshToken.updateMany({
+      where: { userId, tenantId, revokedAt: null },
+      data: { revokedAt: now },
+    });
   }
 
   async removeMember(tenantId: string, memberId: string) {
@@ -106,17 +122,7 @@ export class UsersService {
     if (member.role === 'OWNER') throw new ConflictException('Cannot remove the store owner');
 
     await this.prisma.db.tenantMember.update({ where: { id: memberId }, data: { isActive: false } });
-    // Access/refresh tokens already fail the live membership check; also stop
-    // this tenant's push notifications and mobile sessions from lingering.
-    const now = new Date();
-    await this.prisma.db.deviceToken.updateMany({
-      where: { userId: member.userId, tenantId, revokedAt: null },
-      data: { revokedAt: now },
-    });
-    await this.prisma.db.mobileRefreshToken.updateMany({
-      where: { userId: member.userId, tenantId, revokedAt: null },
-      data: { revokedAt: now },
-    });
+    await this.revokeDeviceAccess(member.userId, tenantId);
     return { removed: true };
   }
 

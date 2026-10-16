@@ -93,4 +93,13 @@ describe('OrderNotificationProcessor', () => {
     send.mockRejectedValueOnce(new Error('push provider down'));
     await expect(processor.process(buildJob())).resolves.toBeUndefined();
   });
+
+  it('gives the Telegram call a timeout, so a hung request cannot hold the worker', async () => {
+    const { processor } = buildProcessor();
+
+    await processor.process(buildJob());
+
+    const init = (global.fetch as jest.Mock).mock.calls[0][1];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
 });

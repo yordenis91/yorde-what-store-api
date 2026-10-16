@@ -14,6 +14,8 @@ interface TelegramMessageJob {
   message: string;
 }
 
+const TELEGRAM_TIMEOUT_MS = 10_000;
+
 @Processor(ORDER_NOTIFICATION_QUEUE)
 export class OrderNotificationProcessor extends WorkerHost {
   private readonly logger = new Logger(OrderNotificationProcessor.name);
@@ -41,6 +43,8 @@ export class OrderNotificationProcessor extends WorkerHost {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      // One slow call must not hold the worker (and every tenant's notifications behind it) indefinitely.
+      signal: AbortSignal.timeout(TELEGRAM_TIMEOUT_MS),
       // Telegram rejects anything over 4096 characters, which would fail the whole notification.
       body: JSON.stringify({ chat_id: tenant.telegramChatId, text: message.slice(0, 4000) }),
     });

@@ -30,6 +30,8 @@ export function validateEnv(config: Record<string, unknown>): Record<string, unk
     );
   }
 
+  if (config.NODE_ENV === 'production') assertProductionSecrets(config);
+
   // An empty CORS_ORIGINS makes main.ts's enableCors() reflect back whatever
   // Origin the browser sends, with credentials — silently, with no warning.
   // Fine for local dev; a real deployment that forgot to set it should not
@@ -56,4 +58,47 @@ export function validateEnv(config: Record<string, unknown>): Record<string, unk
   parseTrustProxy(typeof config.TRUST_PROXY === 'string' ? config.TRUST_PROXY : undefined);
 
   return config;
+}
+
+const SECRET_VARS = [
+  'JWT_SECRET',
+  'JWT_REFRESH_SECRET',
+  'JWT_CUSTOMER_SECRET',
+  'JWT_CUSTOMER_REFRESH_SECRET',
+  'ENCRYPTION_KEY',
+] as const;
+const MIN_SECRET_LENGTH = 32;
+/** The values `.env.example` ships with — public, so a token signed with one can be forged by anyone. */
+const PLACEHOLDER_SECRET = /^change[_-]?me|^xxx|^secret$|^password$|example/i;
+
+/**
+ * Passing the "is it set" check is not enough: copying `.env.example` sets every secret to a value that
+ * is in the repository. Signing sessions or encrypting payment credentials with it is the same as not
+ * signing or encrypting at all. Production only, so local setups keep working with throwaway values.
+ */
+function assertProductionSecrets(config: Record<string, unknown>): void {
+  const problems: string[] = [];
+  for (const key of SECRET_VARS) {
+    const value = String(config[key] ?? '').trim();
+    if (PLACEHOLDER_SECRET.test(value)) problems.push(`${key} is still a placeholder value`);
+    else if (value.length < MIN_SECRET_LENGTH) problems.push(`${key} is shorter than ${MIN_SECRET_LENGTH} characters`);
+  }
+  // Four different JWT secrets only help if they are different: a refresh token signed with the
+  // access secret would be accepted as an access token.
+  const jwtSecrets = SECRET_VARS.filter((k) => k !== 'ENCRYPTION_KEY').map((k) => String(config[k] ?? '').trim());
+  if (new Set(jwtSecrets).size !== jwtSecrets.length)
+    problems.push('the JWT_* secrets must all be different from each other');
+  if (
+    SECRET_VARS.some(
+      (k) => k !== 'ENCRYPTION_KEY' && String(config[k] ?? '').trim() === String(config.ENCRYPTION_KEY ?? '').trim(),
+    )
+  ) {
+    problems.push('ENCRYPTION_KEY must differ from every JWT_* secret');
+  }
+
+  if (problems.length > 0) {
+    throw new Error(
+      `Unsafe secrets for NODE_ENV=production: ${problems.join('; ')}. Generate each with e.g. \`openssl rand -hex 32\`.`,
+    );
+  }
 }

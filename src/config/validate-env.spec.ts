@@ -82,4 +82,46 @@ describe('validateEnv', () => {
       expect(() => validateEnv({ ...VALID_ENV, TRUST_PROXY: 'true' })).toThrow(/TRUST_PROXY/);
     });
   });
+
+  describe('in production', () => {
+    const PROD = {
+      ...VALID_ENV,
+      NODE_ENV: 'production',
+      CORS_ORIGINS: 'https://shop.example.com',
+      JWT_SECRET: 'access-'.padEnd(40, 'a'),
+      JWT_REFRESH_SECRET: 'refresh-'.padEnd(40, 'b'),
+      JWT_CUSTOMER_SECRET: 'customer-'.padEnd(40, 'c'),
+      JWT_CUSTOMER_REFRESH_SECRET: 'customerrefresh-'.padEnd(40, 'd'),
+      ENCRYPTION_KEY: 'encryption-'.padEnd(40, 'e'),
+    };
+
+    it('accepts long, distinct, non-placeholder secrets', () => {
+      expect(() => validateEnv(PROD)).not.toThrow();
+    });
+
+    it('refuses the placeholder values .env.example ships with', () => {
+      expect(() => validateEnv({ ...PROD, JWT_SECRET: 'change_me_access_secret' })).toThrow(/JWT_SECRET.*placeholder/);
+      expect(() => validateEnv({ ...PROD, ENCRYPTION_KEY: 'change_me_32_byte_minimum_secret' })).toThrow(
+        /ENCRYPTION_KEY.*placeholder/,
+      );
+    });
+
+    it('refuses a secret that is too short to be one', () => {
+      expect(() => validateEnv({ ...PROD, JWT_REFRESH_SECRET: 'short' })).toThrow(/JWT_REFRESH_SECRET.*shorter/);
+    });
+
+    it('refuses JWT secrets that are reused, since a refresh token would pass as an access token', () => {
+      expect(() => validateEnv({ ...PROD, JWT_REFRESH_SECRET: PROD.JWT_SECRET })).toThrow(/different/);
+    });
+
+    it('refuses an encryption key equal to a JWT secret', () => {
+      expect(() => validateEnv({ ...PROD, ENCRYPTION_KEY: PROD.JWT_SECRET })).toThrow(/ENCRYPTION_KEY must differ/);
+    });
+
+    it('does not apply outside production, so local setups keep their throwaway values', () => {
+      expect(() =>
+        validateEnv({ ...VALID_ENV, NODE_ENV: 'development', JWT_SECRET: 'change_me_access_secret' }),
+      ).not.toThrow();
+    });
+  });
 });

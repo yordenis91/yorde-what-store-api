@@ -4,6 +4,7 @@ import { Reflector } from '@nestjs/core';
 import { Observable, from } from 'rxjs';
 import { lastValueFrom } from 'rxjs';
 import { PrismaService } from '../../prisma/prisma.service';
+import { withAfterCommit } from '../../prisma/after-commit';
 import { tenantContextStorage } from '../../prisma/tenant-context';
 import { TenantRequest } from '../middleware/tenant.middleware';
 
@@ -39,12 +40,14 @@ export class TenantScopeInterceptor implements NestInterceptor {
 
     const tenantId = req.tenantId;
     return from(
-      this.prisma.$transaction(
-        async (tx) => {
-          await tx.$executeRaw`SELECT set_config('app.tenant_id', ${tenantId}, true)`;
-          return tenantContextStorage.run(tx, () => lastValueFrom(next.handle()));
-        },
-        { timeout: 15000 },
+      withAfterCommit(() =>
+        this.prisma.$transaction(
+          async (tx) => {
+            await tx.$executeRaw`SELECT set_config('app.tenant_id', ${tenantId}, true)`;
+            return tenantContextStorage.run(tx, () => lastValueFrom(next.handle()));
+          },
+          { timeout: 15000 },
+        ),
       ),
     );
   }

@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
+import { withAfterCommit } from './after-commit';
 import { getScopedClient } from './tenant-context';
 
 /**
@@ -81,23 +82,27 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
    * so Postgres RLS policies scope every query in `work` to that tenant.
    */
   async withTenant<T>(tenantId: string, work: (tx: PrismaClient) => Promise<T>): Promise<T> {
-    return this.$transaction(
-      async (tx) => {
-        await tx.$executeRaw`SELECT set_config('app.tenant_id', ${tenantId}, true)`;
-        return work(tx as unknown as PrismaClient);
-      },
-      { timeout: 15000 },
+    return withAfterCommit(() =>
+      this.$transaction(
+        async (tx) => {
+          await tx.$executeRaw`SELECT set_config('app.tenant_id', ${tenantId}, true)`;
+          return work(tx as unknown as PrismaClient);
+        },
+        { timeout: 15000 },
+      ),
     );
   }
 
   /** Runs `work` with RLS bypassed — platform/super-admin cross-tenant queries only. */
   async withRlsBypass<T>(work: (tx: PrismaClient) => Promise<T>): Promise<T> {
-    return this.$transaction(
-      async (tx) => {
-        await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
-        return work(tx as unknown as PrismaClient);
-      },
-      { timeout: 15000 },
+    return withAfterCommit(() =>
+      this.$transaction(
+        async (tx) => {
+          await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
+          return work(tx as unknown as PrismaClient);
+        },
+        { timeout: 15000 },
+      ),
     );
   }
 }
