@@ -15,6 +15,12 @@ export const appConfig = registerAs('app', () => {
     trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
     /** Base for every link the api emails — see common/utils/public-links.ts. */
     publicWebUrl: resolvePublicWebUrl(process.env.PUBLIC_WEB_URL, corsOrigins),
+    /**
+     * Apex that store subdomains hang off (`acme.<this>`), the same value as the web client's
+     * VITE_STOREFRONT_ROOT_DOMAIN. Unset = subdomain mode off. Only used to decide which
+     * return URLs a card checkout may send the payer back to.
+     */
+    storefrontRootDomain: (process.env.STOREFRONT_ROOT_DOMAIN ?? '').trim().toLowerCase().replace(/^\.+/, '') || null,
     env: process.env.NODE_ENV ?? 'development',
   };
 });

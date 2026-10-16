@@ -1,5 +1,6 @@
 // Read when the app boots (config registerAs), so it has to be set before bootstrapTestApp().
 process.env.STRIPE_WEBHOOK_SECRET = 'whsec_e2e_test_secret';
+process.env.STOREFRONT_ROOT_DOMAIN = 'stores.example';
 
 import { getQueueToken } from '@nestjs/bullmq';
 import type { INestApplication } from '@nestjs/common';
@@ -249,16 +250,37 @@ describe('Payment webhooks and checkout guards (e2e)', () => {
       }).expect(409);
     });
 
-    it("refuses a look-alike store subdomain on someone else's domain", async () => {
+    it("accepts the store's own subdomain, resolved by its slug, as a return URL", async () => {
+      const { tenant } = await seedTenant(prisma, { slug: 'acme-shop' });
+      const order = await seedOrder(prisma, tenant.id);
+      jest
+        .spyOn(app.get(StripeAdapter), 'createCheckout')
+        .mockResolvedValueOnce({ checkoutUrl: 'https://checkout.stripe.test/s', providerReference: 'cs_new' });
+
+      const res = await checkout(tenant.id, {
+        orderId: order.id,
+        successUrl: 'https://acme-shop.stores.example/order-confirmed/1',
+        cancelUrl: 'https://acme-shop.stores.example/checkout',
+      }).expect(201);
+
+      expect(res.body.data.checkoutUrl).toBe('https://checkout.stripe.test/s');
+    });
+
+    it("refuses a look-alike host, another store's subdomain and a bare prefix", async () => {
       const { tenant } = await seedTenant(prisma, { slug: 'co-lookalike' });
       await prisma.tenant.update({ where: { id: tenant.id }, data: { subdomain: 'shop' } });
       const order = await seedOrder(prisma, tenant.id);
-
-      await checkout(tenant.id, {
-        orderId: order.id,
-        successUrl: 'https://shop.evil.example/ok',
-        cancelUrl: 'https://shop.evil.example/cancel',
-      }).expect(400);
+      for (const host of [
+        'shop.evil.example',
+        'co-lookalike.stores.example.evil.example',
+        'someone-else.stores.example',
+      ]) {
+        await checkout(tenant.id, {
+          orderId: order.id,
+          successUrl: `https://${host}/ok`,
+          cancelUrl: `https://${host}/cancel`,
+        }).expect(400);
+      }
     });
 
     it('refuses return URLs that point away from the store', async () => {

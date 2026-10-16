@@ -59,7 +59,9 @@ function buildService(
     stripeAdapter,
     mercadoPagoAdapter,
     invoiceQueue as any,
-    { get: jest.fn().mockReturnValue(['https://shop.example']) } as any,
+    {
+      get: jest.fn((key: string) => (key === 'app.corsOrigins' ? ['https://shop.example'] : null)),
+    } as any,
   );
   return {
     service,
