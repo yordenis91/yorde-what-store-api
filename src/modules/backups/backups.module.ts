@@ -1,4 +1,5 @@
 import { Logger, Module, OnModuleInit } from '@nestjs/common';
+import { AuditModule } from '../audit/audit.module';
 import { BullModule, InjectQueue } from '@nestjs/bullmq';
 import { ConfigService } from '@nestjs/config';
 import { Queue } from 'bullmq';
@@ -7,7 +8,7 @@ import { BackupsController } from './backups.controller';
 import { BackupsService } from './backups.service';
 
 @Module({
-  imports: [BullModule.registerQueue({ name: BACKUP_QUEUE })],
+  imports: [BullModule.registerQueue({ name: BACKUP_QUEUE }), AuditModule],
   controllers: [BackupsController],
   providers: [BackupsService],
   exports: [BackupsService],

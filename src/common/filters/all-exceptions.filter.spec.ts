@@ -67,4 +67,19 @@ describe('AllExceptionsFilter', () => {
     expect(captureSpy).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ path: '/api/v1/auth/login' }));
     captureSpy.mockRestore();
   });
+
+  it('never writes the stream token from the query string to the logs, Sentry or the response', () => {
+    const logger = { error: jest.fn() } as unknown as { error: jest.Mock };
+    const filter = new AllExceptionsFilter(logger as any);
+    const url = '/api/v1/orders/events?access_token=eyJ.SECRET.jwt&tenantId=t1';
+    const { host, json } = buildHost({ url });
+    const captureSpy = jest.spyOn(sentry, 'captureException').mockImplementation(() => undefined);
+
+    filter.catch(new Error('boom'), host);
+
+    const everythingWritten = JSON.stringify([logger.error.mock.calls, json.mock.calls, captureSpy.mock.calls]);
+    expect(everythingWritten).not.toContain('SECRET');
+    expect(everythingWritten).toContain('access_token=[redacted]');
+    captureSpy.mockRestore();
+  });
 });

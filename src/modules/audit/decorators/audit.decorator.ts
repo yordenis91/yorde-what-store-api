@@ -9,6 +9,14 @@ export interface AuditOptions {
   entityType: string;
   /** Route param holding the entity id, when it isn't `:id` (e.g. "key" for email templates). Defaults to "id". */
   paramName?: string;
+  /**
+   * What of the request body is kept in the log. `full` (default) keeps it with credential-looking
+   * keys blanked. `keys` keeps only the names of the fields sent — for requests that carry customer
+   * personal data, where the log should say what changed, not copy the data. `include` lists body
+   * fields that are safe to keep verbatim in `keys` mode.
+   */
+  body?: 'full' | 'keys';
+  include?: string[];
 }
 
 /**

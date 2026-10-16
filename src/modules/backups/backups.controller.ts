@@ -1,7 +1,9 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
+import { Body, Controller, Get, Post, UseInterceptors } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { IsString, Matches } from 'class-validator';
 import { Roles } from '../../common/decorators';
+import { Audit } from '../audit/decorators/audit.decorator';
+import { AuditInterceptor } from '../audit/interceptors/audit.interceptor';
 import { BackupsService } from './backups.service';
 
 class RestoreBackupDto {
@@ -17,6 +19,7 @@ class RestoreBackupDto {
 
 @ApiTags('platform')
 @Roles('SUPER_ADMIN')
+@UseInterceptors(AuditInterceptor)
 @Controller('platform/backups')
 export class BackupsController {
   constructor(private readonly backups: BackupsService) {}
@@ -26,6 +29,7 @@ export class BackupsController {
     return this.backups.list();
   }
 
+  @Audit({ action: 'backup.run', entityType: 'Backup' })
   @Post('run')
   run() {
     return this.backups.run();
@@ -36,6 +40,7 @@ export class BackupsController {
    * that it uploaded. `targetDatabaseUrl` must point at a scratch database —
    * the service rejects anything matching the live DATABASE_URL.
    */
+  @Audit({ action: 'backup.restore', entityType: 'Backup', body: 'keys', include: ['key'] })
   @Post('restore')
   async restore(@Body() dto: RestoreBackupDto) {
     await this.backups.restore(dto.key, dto.targetDatabaseUrl);

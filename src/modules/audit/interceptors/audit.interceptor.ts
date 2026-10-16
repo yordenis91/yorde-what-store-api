@@ -29,6 +29,14 @@ function redact(value: unknown): unknown {
   );
 }
 
+function describeBody(body: unknown, options: AuditOptions): unknown {
+  if (options.body !== 'keys') return redact(body);
+  if (!body || typeof body !== 'object') return {};
+  const record = body as Record<string, unknown>;
+  const kept = Object.fromEntries((options.include ?? []).filter((k) => k in record).map((k) => [k, record[k]]));
+  return { fields: Object.keys(record), ...(Object.keys(kept).length > 0 && { values: redact(kept) }) };
+}
+
 /**
  * Fire-and-forget: writes to AuditLog after the handler succeeds, without
  * delaying the response or letting an audit-write failure fail the request.
@@ -66,16 +74,25 @@ export class AuditInterceptor implements NestInterceptor {
         const tenantId: string | undefined =
           req.tenantId ?? resultRecord?.tenantId ?? (options.entityType === 'Tenant' ? entityId : undefined);
 
+        // While impersonating, `actor` is the store owner the platform admin is acting as. Record
+        // the real person, and who they were acting as.
+        const impersonating = actor?.impersonatedBy
+          ? { userId: actor.id, email: actor.email, tenantRole: actor.tenantRole }
+          : undefined;
+
         this.auditLog
           .record({
-            actorId: actor?.id,
-            actorEmail: actor?.email,
-            actorRole: actor?.tenantRole ?? actor?.globalRole,
+            actorId: actor?.impersonatedBy ?? actor?.id,
+            actorEmail: actor?.impersonatedBy ? undefined : actor?.email,
+            actorRole: actor?.impersonatedBy ? 'SUPER_ADMIN' : (actor?.tenantRole ?? actor?.globalRole),
             action: options.action,
             entityType: options.entityType,
             entityId,
             tenantId,
-            metadata: { request: redact(req.body) },
+            metadata: {
+              request: describeBody(req.body, options),
+              ...(impersonating && { impersonating }),
+            },
             ipAddress: req.ip,
             userAgent: Array.isArray(req.headers['user-agent'])
               ? req.headers['user-agent'][0]

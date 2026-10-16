@@ -4,6 +4,7 @@ import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
 import { Logger } from 'winston';
 import { Prisma } from '@prisma/client';
 import { captureException } from '../../sentry';
+import { redactUrl } from '../utils/redact-url.util';
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
@@ -15,11 +16,13 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const request = ctx.getRequest();
 
     const { status, message, code } = this.resolve(exception);
+    // The order-events stream authenticates with a JWT in the query string; it must not reach logs, Sentry or the response.
+    const path = redactUrl(request?.url);
 
     // Only unexpected server-side failures — a validation 400 or a 404 is
     // normal traffic, not something anyone needs paged for.
     if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
-      captureException(exception, { path: request?.url, method: request?.method, tenantId: request?.tenantId });
+      captureException(exception, { path, method: request?.method, tenantId: request?.tenantId });
     }
 
     // A dependency being unreachable is not "a bug" — logging it under the
@@ -29,7 +32,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     // on its own and doesn't get lost in the usual request_error noise.
     if (code === 'DATABASE_UNAVAILABLE') {
       this.logger.error('database_unavailable — requests will keep failing until the DB is reachable again', {
-        path: request?.url,
+        path,
         method: request?.method,
         tenantId: request?.tenantId,
         detail: exception instanceof Error ? exception.message : undefined,
@@ -39,7 +42,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
         status,
         message,
         code,
-        path: request?.url,
+        path,
         method: request?.method,
         tenantId: request?.tenantId,
         stack: exception instanceof Error ? exception.stack : undefined,
@@ -51,7 +54,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       statusCode: status,
       code,
       message,
-      path: request?.url,
+      path,
       timestamp: new Date().toISOString(),
     });
   }
