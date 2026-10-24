@@ -28,7 +28,7 @@ export class StaleOrdersProcessor extends WorkerHost {
     const stale = await this.prisma.withRlsBypass((tx) =>
       tx.order.findMany({
         where: {
-          fulfillmentMethod: { in: ['STRIPE', 'MERCADOPAGO'] },
+          fulfillmentMethod: { in: ['STRIPE', 'MERCADOPAGO', 'PAYPAL'] },
           status: 'PENDING',
           paymentStatus: 'PENDING',
           createdAt: { lt: cutoff },
@@ -53,9 +53,9 @@ export class StaleOrdersProcessor extends WorkerHost {
           const order = await tx.order.findUniqueOrThrow({ where: { id }, include: { items: true } });
           const tenant = await tx.tenant.findUniqueOrThrow({
             where: { id: tenantId },
-            select: { tracksInventory: true },
+            select: { tracksInventory: true, catalogType: true },
           });
-          if (tenant.tracksInventory) {
+          if (tenant.tracksInventory && tenant.catalogType !== 'DIGITAL') {
             for (const item of order.items) {
               if (item.variantId) {
                 await tx.productVariant.updateMany({

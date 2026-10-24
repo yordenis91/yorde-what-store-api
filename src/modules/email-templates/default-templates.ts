@@ -1,4 +1,4 @@
-export const TEMPLATE_KEYS = ['staff-invite', 'order-confirmation', 'password-reset'] as const;
+export const TEMPLATE_KEYS = ['staff-invite', 'order-confirmation', 'password-reset', 'digital-delivery'] as const;
 export type EmailTemplateKey = (typeof TEMPLATE_KEYS)[number];
 
 export interface EmailTemplateContent {
@@ -28,6 +28,16 @@ export const SEED_TEMPLATES: Record<EmailTemplateKey, Record<'en' | 'es', EmailT
       body: 'Hola {customer_name},\n\n¡Gracias por tu pedido en {store_name}!\n\nPedido: {order_no}\nTotal: {grand_total}\n\nVer tu pedido: {order_link}\n\nTe contactaremos sobre la entrega.',
     },
   },
+  'digital-delivery': {
+    en: {
+      subject: 'Your downloads from {store_name} — order {order_no}',
+      body: 'Hi {customer_name},\n\nThanks for your purchase at {store_name}! Your downloads are ready:\n\n{download_links}\n\nEach link works for {expiry_days} days and allows up to {max_downloads} downloads. Save the files to your device.\n\nOrder: {order_no}\n\nIf you have any trouble downloading, just reply to this email.',
+    },
+    es: {
+      subject: 'Tus descargas de {store_name} — pedido {order_no}',
+      body: 'Hola {customer_name},\n\n¡Gracias por tu compra en {store_name}! Tus descargas están listas:\n\n{download_links}\n\nCada enlace funciona durante {expiry_days} días y permite hasta {max_downloads} descargas. Guarda los archivos en tu dispositivo.\n\nPedido: {order_no}\n\nSi tienes algún problema para descargar, responde a este correo.',
+    },
+  },
   'password-reset': {
     en: {
       subject: 'Reset your password — {store_name}',
@@ -49,6 +59,7 @@ export const DEFAULT_TEMPLATES: Record<EmailTemplateKey, EmailTemplateContent> =
   'staff-invite': SEED_TEMPLATES['staff-invite'].en,
   'order-confirmation': SEED_TEMPLATES['order-confirmation'].en,
   'password-reset': SEED_TEMPLATES['password-reset'].en,
+  'digital-delivery': SEED_TEMPLATES['digital-delivery'].en,
 };
 
 /**

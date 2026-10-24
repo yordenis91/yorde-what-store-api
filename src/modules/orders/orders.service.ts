@@ -29,6 +29,7 @@ import { EMAIL_JOB_OPTIONS, EMAIL_QUEUE, ORDER_NOTIFICATION_QUEUE } from '../../
 import { EmailJobData } from '../../queue/processors/email.processor';
 import { getInvoicePath } from '../../queue/processors/invoice-storage.util';
 import { OrderEvent, OrderEventsService } from './order-events.service';
+import { DigitalService } from '../digital/digital.service';
 import { PaymentsService } from '../payments/payments.service';
 import { PlansService } from '../plans/plans.service';
 import { ConfigService } from '@nestjs/config';
@@ -72,6 +73,7 @@ export class OrdersService {
     private readonly paymentsService: PaymentsService,
     private readonly config: ConfigService,
     private readonly plansService: PlansService,
+    private readonly digital: DigitalService,
   ) {}
 
   /** How often an open order-events stream re-checks that its viewer is still allowed to see it. */
@@ -127,13 +129,28 @@ export class OrdersService {
       await this.paymentsService.assertZelleConfigured(tenantId);
     }
 
+    // A digital store sells files delivered by email once paid: it needs an address to deliver to,
+    // an online payment (WhatsApp/Telegram orders are settled by hand, so nothing would trigger the
+    // delivery), no shipping, and one copy per order.
+    const isDigitalStore = tenant.catalogType === 'DIGITAL';
+    if (isDigitalStore) {
+      if (!dto.customerEmail) throw new BadRequestException('An email address is required to deliver digital products');
+      if (dto.fulfillmentMethod === 'WHATSAPP' || dto.fulfillmentMethod === 'TELEGRAM') {
+        throw new BadRequestException('Digital products are paid online');
+      }
+      if (dto.shippingId) throw new BadRequestException('Digital products have no shipping');
+      if (dto.items.some((i) => i.quantity !== 1)) {
+        throw new BadRequestException('Digital products are sold one copy at a time');
+      }
+    }
+
     const { pricedLines, coupon, totals } = await this.priceOrder(tenantId, dto, { onlyPublished: true });
     const { subtotal, taxTotal, discountTotal, shippingTotal, grandTotal } = totals;
 
     // Before anything is written. TenantScopeInterceptor runs the whole request
     // in one transaction, so a rejection here rolls back any stock already
     // taken by earlier lines of the same order.
-    if (tenant.tracksInventory) await this.reserveStock(pricedLines);
+    if (tenant.tracksInventory && !isDigitalStore) await this.reserveStock(pricedLines);
     if (coupon) await this.redeemCoupon(coupon);
 
     const orderNumber = this.generateOrderNumber();
@@ -158,7 +175,7 @@ export class OrdersService {
         grandTotal,
         couponId: coupon?.id,
         shippingId: dto.shippingId,
-        shippingAddress: dto.shippingAddress as any,
+        shippingAddress: isDigitalStore ? undefined : (dto.shippingAddress as any),
         paymentProofUrl: dto.paymentProofUrl,
         paymentReference: dto.paymentReference,
         items: {
@@ -224,7 +241,7 @@ export class OrdersService {
 
     await queueConfirmationEmail();
     this.orderEvents.emit(tenantId, this.toOrderEvent('order.created', order));
-    return { order, fulfillment: { type: dto.fulfillmentMethod as 'STRIPE' | 'MERCADOPAGO' | 'ZELLE' } };
+    return { order, fulfillment: { type: dto.fulfillmentMethod as 'STRIPE' | 'MERCADOPAGO' | 'PAYPAL' | 'ZELLE' } };
   }
 
   /**
@@ -698,7 +715,9 @@ export class OrdersService {
     // WhatsApp/Telegram/Zelle, "Refunded" is just a label for money returned by other means.
     const isPaidGatewayOrder =
       order.paymentStatus === 'PAID' &&
-      (order.fulfillmentMethod === 'STRIPE' || order.fulfillmentMethod === 'MERCADOPAGO');
+      (order.fulfillmentMethod === 'STRIPE' ||
+        order.fulfillmentMethod === 'MERCADOPAGO' ||
+        order.fulfillmentMethod === 'PAYPAL');
     const returnsMoney =
       order.paymentStatus === 'PAID' && (status === 'REFUNDED' || (status === 'CANCELLED' && isPaidGatewayOrder));
     // Marking an order REFUNDED is an accounting decision for the owner even when no gateway is involved.
@@ -724,6 +743,12 @@ export class OrdersService {
       }
     } else if (Object.keys(data).length > 1) {
       await this.prisma.db.order.update({ where: { id }, data: data as any });
+    }
+
+    // A refunded or cancelled paid order must not keep working download links. Inside the request
+    // transaction, so if the provider's refund below fails everything (links included) rolls back.
+    if ((status === 'REFUNDED' || status === 'CANCELLED') && order.paymentStatus === 'PAID') {
+      await this.digital.revokeForOrder(this.prisma.db, id, status === 'REFUNDED' ? 'refunded' : 'cancelled');
     }
 
     // Cancelling frees what the order took: stock and the coupon use.

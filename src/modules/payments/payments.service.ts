@@ -4,10 +4,12 @@ import { ConfigService } from '@nestjs/config';
 import { Queue } from 'bullmq';
 import Stripe from 'stripe';
 import { Order } from '@prisma/client';
+import { DigitalService } from '../digital/digital.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantsService } from '../tenants/tenants.service';
 import { StripeAdapter } from './adapters/stripe.adapter';
 import { MercadoPagoAdapter } from './adapters/mercadopago.adapter';
+import { PayPalAdapter, PayPalOrderState, PayPalWebhookHeaders } from './adapters/paypal.adapter';
 import { INVOICE_PDF_QUEUE } from '../../queue/queue.constants';
 import { afterCommit } from '../../prisma/after-commit';
 import { deleteUploadedFile } from '../uploads/uploads.util';
@@ -34,6 +36,8 @@ export class PaymentsService {
     private readonly tenantsService: TenantsService,
     private readonly stripeAdapter: StripeAdapter,
     private readonly mercadoPagoAdapter: MercadoPagoAdapter,
+    private readonly paypalAdapter: PayPalAdapter,
+    private readonly digital: DigitalService,
     @InjectQueue(INVOICE_PDF_QUEUE) private readonly invoiceQueue: Queue,
     private readonly config: ConfigService,
   ) {}
@@ -51,11 +55,17 @@ export class PaymentsService {
    * this deployment or this store — otherwise a checkout link can be minted
    * that returns the payer to an attacker's page.
    */
-  private async assertRedirectUrlsAllowed(tenantId: string, urls: { successUrl: string; cancelUrl: string }) {
-    const tenant = await this.prisma.db.tenant.findUniqueOrThrow({
-      where: { id: tenantId },
-      select: { slug: true, subdomain: true, customDomain: true },
-    });
+  private async assertRedirectUrlsAllowed(
+    tenantId: string,
+    urls: { successUrl: string; cancelUrl: string },
+    knownTenant?: { slug: string; subdomain: string | null; customDomain: string | null },
+  ) {
+    const tenant =
+      knownTenant ??
+      (await this.prisma.db.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: { slug: true, subdomain: true, customDomain: true },
+      }));
     const rules = {
       corsOrigins: this.config.get<string[]>('app.corsOrigins') ?? [],
       rootDomain: this.config.get<string | null>('app.storefrontRootDomain') ?? null,
@@ -196,6 +206,7 @@ export class PaymentsService {
           return Boolean(paymentIntentId && winner?.stripePaymentIntentId !== paymentIntentId);
         }
         afterCommit(() => this.invoiceQueue.add('generate-invoice', { tenantId, orderId }));
+        await this.digital.createDeliveryForPaidOrder(tx, tenantId, orderId);
         return false;
       });
       if (refundNeeded && paymentIntentId) {
@@ -322,6 +333,7 @@ export class PaymentsService {
           return winner?.mercadoPagoPaymentId !== String(payment.id);
         }
         afterCommit(() => this.invoiceQueue.add('generate-invoice', { tenantId, orderId }));
+        await this.digital.createDeliveryForPaidOrder(tx, tenantId, orderId);
         return false;
       });
       if (refundNeeded) {
@@ -338,10 +350,254 @@ export class PaymentsService {
     return { received: true };
   }
 
+  // ── PayPal ──────────────────────────────────────────────────────────────
+
+  /**
+   * Runs outside the request transaction (see SkipTenantScope on the route): the database is
+   * touched in two short transactions, one before and one after the PayPal call, so no connection
+   * is held while waiting on PayPal and a burst of buyers cannot drain the pool.
+   */
+  async createPayPalCheckout(tenantId: string, orderId: string, urls: { successUrl: string; cancelUrl: string }) {
+    const { order, enabled, tenant } = await this.prisma.withTenant(tenantId, async (tx) => ({
+      order: await tx.order.findFirst({ where: { id: orderId, tenantId }, include: { items: true } }),
+      enabled: await tx.tenantPaymentSetting.findUnique({
+        where: { tenantId_provider: { tenantId, provider: 'PAYPAL' } },
+        select: { isEnabled: true },
+      }),
+      tenant: await tx.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: { slug: true, subdomain: true, customDomain: true },
+      }),
+    }));
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.fulfillmentMethod !== 'PAYPAL') {
+      throw new BadRequestException('Order is not configured for PayPal payment');
+    }
+    if (!enabled?.isEnabled) throw new BadRequestException('PayPal is not enabled for this store');
+
+    this.assertPayable(order);
+    await this.assertRedirectUrlsAllowed(tenantId, urls, tenant);
+
+    // The amount is the order's own total, computed from the database when the order was created.
+    const result = await this.paypalAdapter.createCheckout(this.checkoutContext(tenantId, order), null, urls);
+
+    await this.prisma.withTenant(tenantId, (tx) =>
+      tx.order.update({ where: { id: order.id }, data: { paypalOrderId: result.providerReference } }),
+    );
+    return result;
+  }
+
+  /**
+   * The buyer is back from PayPal. Coming back proves nothing, so this asks PayPal to capture the
+   * order and settles only if PayPal says the capture completed. Safe to call repeatedly and
+   * alongside the webhook: whichever settles first wins and the other changes nothing.
+   * Like createPayPalCheckout it holds no database connection while PayPal answers.
+   */
+  async capturePayPalOrder(tenantId: string, orderId: string) {
+    const order = await this.prisma.withTenant(tenantId, (tx) =>
+      tx.order.findFirst({ where: { id: orderId, tenantId } }),
+    );
+    if (!order || order.fulfillmentMethod !== 'PAYPAL' || !order.paypalOrderId) {
+      throw new NotFoundException('Order not found');
+    }
+    if (order.paymentStatus !== 'PENDING') {
+      return { paymentStatus: order.paymentStatus, status: order.status };
+    }
+
+    const state = await this.paypalAdapter.captureOrder(order.paypalOrderId);
+    if (state.orderStatus !== 'NOT_APPROVED') await this.settlePayPal(tenantId, orderId, state);
+
+    const fresh = await this.prisma.withTenant(tenantId, (tx) =>
+      tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { paymentStatus: true, status: true } }),
+    );
+    return fresh;
+  }
+
+  /**
+   * The one place a PayPal payment becomes a paid order, for the buyer's return and for webhooks alike.
+   * Mirrors the Stripe/MercadoPago settlement: amount and currency must match what the order owes,
+   * the confirm is a conditional UPDATE so concurrent callers cannot both win, a second different
+   * capture is refunded, and the digital delivery is created in the same transaction.
+   */
+  private async settlePayPal(tenantId: string, orderId: string, state: PayPalOrderState) {
+    if (state.captureStatus === 'DECLINED' || state.captureStatus === 'FAILED') {
+      await this.prisma.withTenant(tenantId, (tx) =>
+        tx.order.updateMany({ where: { id: orderId, paymentStatus: 'PENDING' }, data: { paymentStatus: 'FAILED' } }),
+      );
+      return;
+    }
+    // PENDING captures (e.g. an eCheck) are not money yet; the COMPLETED webhook settles them later.
+    if (state.captureStatus !== 'COMPLETED' || !state.captureId) return;
+    const captureId = state.captureId;
+
+    const refundNeeded = await this.prisma.withTenant(tenantId, async (tx) => {
+      const existing = await tx.order.findUnique({ where: { id: orderId } });
+      if (!existing) {
+        this.logger.warn(`PayPal capture ${captureId} for unknown order ${orderId} ignored`);
+        return false;
+      }
+      // Never settle an order through a PayPal order it does not own.
+      if (existing.fulfillmentMethod !== 'PAYPAL' || existing.paypalOrderId !== state.paypalOrderId) {
+        this.logger.error(
+          `PayPal capture ${captureId} came from order ${state.paypalOrderId}, not order ${orderId}'s; ignored`,
+        );
+        return false;
+      }
+      if (existing.paymentStatus === 'PAID') {
+        const duplicate = Boolean(existing.paypalCaptureId && existing.paypalCaptureId !== captureId);
+        if (duplicate) this.logger.error(`Order ${orderId} paid twice; refunding PayPal capture ${captureId}`);
+        return duplicate;
+      }
+      if (TERMINAL_ORDER_STATUSES.includes(existing.status)) {
+        this.logger.error(`PayPal capture ${captureId} paid for order ${orderId} but the order is ${existing.status}`);
+        return existing.status === 'CANCELLED';
+      }
+      if (
+        state.amountMinor !== toMinorUnits(Number(existing.grandTotal), existing.currency) ||
+        state.currency?.toUpperCase() !== existing.currency.toUpperCase()
+      ) {
+        this.logger.error(
+          `PayPal capture ${captureId} amount ${state.amountMinor} ${state.currency} does not match order ${orderId} total ${existing.grandTotal} ${existing.currency}; refunding`,
+        );
+        return true;
+      }
+
+      const { count } = await tx.order.updateMany({
+        where: { id: orderId, paymentStatus: { not: 'PAID' }, status: { notIn: TERMINAL_ORDER_STATUSES as any } },
+        data: { paymentStatus: 'PAID', status: 'CONFIRMED', paypalCaptureId: captureId },
+      });
+      if (count === 0) {
+        // Lost a race: a concurrent redelivery of this same capture changes nothing; a different one is the duplicate.
+        const winner = await tx.order.findUnique({ where: { id: orderId } });
+        return Boolean(winner?.paypalCaptureId && winner.paypalCaptureId !== captureId);
+      }
+      afterCommit(() => this.invoiceQueue.add('generate-invoice', { tenantId, orderId }));
+      await this.digital.createDeliveryForPaidOrder(tx, tenantId, orderId);
+      return false;
+    });
+
+    if (refundNeeded) {
+      try {
+        await this.paypalAdapter.refund(captureId);
+      } catch {
+        this.logger.error(
+          `Automatic refund of PayPal capture ${captureId} for order ${orderId} failed; refund manually`,
+        );
+      }
+    }
+  }
+
+  /** Order ids for a PayPal order or capture — only orders this platform created carry those ids, whatever a webhook claims. */
+  private findOrderByPayPal(where: { paypalOrderId: string } | { paypalCaptureId: string }) {
+    return this.prisma.withRlsBypass((tx) =>
+      tx.order.findFirst({ where, select: { id: true, tenantId: true, paymentStatus: true } }),
+    );
+  }
+
+  async handlePayPalWebhook(rawBody: Buffer, headers: PayPalWebhookHeaders) {
+    if (!(await this.paypalAdapter.verifyWebhook(headers, rawBody))) {
+      this.logger.warn('PayPal webhook signature verification failed');
+      throw new BadRequestException('Invalid webhook signature');
+    }
+
+    const event = JSON.parse(rawBody.toString('utf8')) as {
+      id?: string;
+      event_type?: string;
+      resource?: any;
+    };
+    const resource = event.resource ?? {};
+    const type = event.event_type;
+    this.logger.log(`PayPal webhook ${type} (${event.id})`);
+
+    switch (type) {
+      // The buyer approved but may never come back (closed the tab): capture from here too.
+      case 'CHECKOUT.ORDER.APPROVED': {
+        const ref = await this.findOrderByPayPal({ paypalOrderId: String(resource.id) });
+        if (!ref) break;
+        if (ref.paymentStatus === 'PENDING') {
+          const state = await this.paypalAdapter.captureOrder(String(resource.id));
+          if (state.orderStatus !== 'NOT_APPROVED') await this.settlePayPal(ref.tenantId, ref.id, state);
+        }
+        break;
+      }
+      case 'PAYMENT.CAPTURE.COMPLETED':
+      case 'PAYMENT.CAPTURE.DENIED':
+      case 'PAYMENT.CAPTURE.DECLINED': {
+        const paypalOrderId = resource.supplementary_data?.related_ids?.order_id;
+        const ref = paypalOrderId ? await this.findOrderByPayPal({ paypalOrderId: String(paypalOrderId) }) : null;
+        if (!ref) {
+          this.logger.warn(`PayPal capture ${resource.id} does not belong to any order of this platform; ignored`);
+          break;
+        }
+        await this.settlePayPal(ref.tenantId, ref.id, {
+          paypalOrderId: String(paypalOrderId),
+          orderStatus: 'COMPLETED',
+          captureId: String(resource.id),
+          captureStatus: type === 'PAYMENT.CAPTURE.COMPLETED' ? 'COMPLETED' : 'DECLINED',
+          amountMinor: toMinorUnits(Number(resource.amount?.value), resource.amount?.currency_code ?? 'USD'),
+          currency: resource.amount?.currency_code,
+        });
+        break;
+      }
+      case 'PAYMENT.CAPTURE.REFUNDED': {
+        // The resource is the refund; its "up" link points at the capture it reverses.
+        const up = (resource.links as { rel: string; href: string }[] | undefined)?.find((l) => l.rel === 'up')?.href;
+        const captureId = up?.split('/captures/')[1]?.split(/[/?]/)[0];
+        if (captureId) await this.markPayPalOrderLost(captureId, 'REFUNDED');
+        break;
+      }
+      case 'PAYMENT.CAPTURE.REVERSED':
+        await this.markPayPalOrderLost(String(resource.id), 'DISPUTED');
+        break;
+      case 'CUSTOMER.DISPUTE.CREATED':
+      case 'CUSTOMER.DISPUTE.UPDATED': {
+        const captureId = resource.disputed_transactions?.[0]?.seller_transaction_id;
+        if (captureId) await this.markPayPalOrderLost(String(captureId), 'DISPUTED');
+        break;
+      }
+      case 'CUSTOMER.DISPUTE.RESOLVED':
+        // Links stay off after a dispute either way; the owner decides whether to re-enable a buyer
+        // who won it for the seller. Logged so it is not silent.
+        this.logger.log(
+          `PayPal dispute ${resource.dispute_id} resolved (${resource.dispute_outcome?.outcome_code ?? 'unknown'})`,
+        );
+        break;
+      default:
+        break;
+    }
+    return { received: true };
+  }
+
+  /** A refund or dispute happened on PayPal's side: reflect it on the order and switch the download links off. Idempotent. */
+  private async markPayPalOrderLost(captureId: string, to: 'REFUNDED' | 'DISPUTED') {
+    const ref = await this.findOrderByPayPal({ paypalCaptureId: captureId });
+    if (!ref) {
+      this.logger.warn(`PayPal capture ${captureId} is not linked to any order; ignored`);
+      return;
+    }
+    await this.prisma.withTenant(ref.tenantId, async (tx) => {
+      await tx.order.updateMany({
+        where: { id: ref.id, paymentStatus: { in: to === 'DISPUTED' ? ['PAID', 'REFUNDED'] : ['PAID'] } },
+        data: to === 'REFUNDED' ? { paymentStatus: 'REFUNDED', status: 'REFUNDED' } : { paymentStatus: 'DISPUTED' },
+      });
+      await this.digital.revokeForOrder(tx, ref.id, to === 'REFUNDED' ? 'refunded' : 'dispute');
+    });
+  }
+
   /** Reverses the online charge for a paid order, dispatching to the provider it was actually paid through. No-op for orders with no online charge to reverse (e.g. WhatsApp/Telegram). */
   async refundOrderPayment(tenantId: string, order: Order) {
     if (order.fulfillmentMethod === 'STRIPE' && order.stripePaymentIntentId) {
       await this.refundPaymentIntent(tenantId, order.stripePaymentIntentId);
+      return;
+    }
+    if (order.fulfillmentMethod === 'PAYPAL' && order.paypalCaptureId) {
+      try {
+        await this.paypalAdapter.refund(order.paypalCaptureId);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        this.logger.warn(`PayPal refund failed for capture ${order.paypalCaptureId}: ${message}`);
+        throw new BadRequestException(`PayPal could not process this refund: ${message}`);
+      }
       return;
     }
     if (order.fulfillmentMethod === 'MERCADOPAGO' && order.mercadoPagoPaymentId) {
@@ -392,6 +648,7 @@ export class PaymentsService {
       data: { paymentStatus: 'PAID', status: 'CONFIRMED' },
     });
     afterCommit(() => this.invoiceQueue.add('generate-invoice', { tenantId, orderId: updated.id }));
+    await this.digital.createDeliveryForPaidOrder(this.prisma.db, tenantId, updated.id);
     return updated;
   }
 

@@ -39,6 +39,7 @@ enum FulfillmentMethod {
   STRIPE
   MERCADOPAGO
   ZELLE
+  PAYPAL
 }
 
 enum OrderStatus {
@@ -55,6 +56,8 @@ enum PaymentStatus {
   PAID
   FAILED
   REFUNDED
+  /// The buyer opened a dispute/chargeback with the provider. Digital download links are revoked.
+  DISPUTED
 }
 
 enum PlanDuration {
@@ -87,6 +90,22 @@ enum PaymentProvider {
   STRIPE
   MERCADOPAGO
   ZELLE
+  PAYPAL
+}
+
+/// What a store sells. One kind per store: a digital store has no shipping and no
+/// inventory, and its products are delivered by email once paid.
+enum CatalogType {
+  PHYSICAL
+  DIGITAL
+}
+
+enum DigitalDeliveryStatus {
+  /// Paid; the delivery email has not gone out yet (or is being retried).
+  PENDING
+  SENT
+  /// Download links disabled (refund, dispute or manual revoke).
+  REVOKED
 }
 
 enum DevicePlatform {
@@ -337,6 +356,9 @@ model Tenant {
   /// have every product read as sold out. When on, orders are rejected if they
   /// exceed stock and accepted orders decrement it.
   tracksInventory Boolean @default(false) @map("tracks_inventory")
+
+  /// PHYSICAL (default) or DIGITAL. Locked once the store has products so a catalog never mixes both.
+  catalogType CatalogType @default(PHYSICAL) @map("catalog_type")
 
   logoUrl        String? @map("logo_url")
   invoiceLogoUrl String? @map("invoice_logo_url")
@@ -668,12 +690,14 @@ model Product {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
-  tenant     Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  categories ProductCategoryOnProduct[]
-  taxes      ProductTaxOnProduct[]
-  variants   ProductVariant[]
-  images     ProductImage[]
-  orderItems OrderItem[]
+  tenant        Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  categories    ProductCategoryOnProduct[]
+  taxes         ProductTaxOnProduct[]
+  variants      ProductVariant[]
+  images        ProductImage[]
+  orderItems    OrderItem[]
+  digitalAssets DigitalAsset[]
+  priceSchedule ProductPriceSchedule[]
 
   @@index([tenantId])
   @@map("products")
@@ -842,6 +866,11 @@ model Order {
   mercadoPagoPreferenceId String? @map("mercado_pago_preference_id")
   mercadoPagoPaymentId    String? @map("mercado_pago_payment_id")
 
+  /// PayPal order id (created server side) and the capture that settled it. The capture id is
+  /// unique: the same capture can never confirm two orders, nor the same order twice.
+  paypalOrderId   String? @unique @map("paypal_order_id")
+  paypalCaptureId String? @unique @map("paypal_capture_id")
+
   /// Customer-submitted evidence for a Zelle transfer — an uploaded screenshot
   /// URL and/or a free-text confirmation number. Cleared on rejection so the
   /// admin UI can tell "never submitted" apart from "submitted, awaiting review".
@@ -851,11 +880,12 @@ model Order {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  tenant   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer Customer?   @relation(fields: [customerId], references: [id])
-  coupon   Coupon?     @relation(fields: [couponId], references: [id])
-  shipping Shipping?   @relation(fields: [shippingId], references: [id])
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer Customer?        @relation(fields: [customerId], references: [id])
+  coupon   Coupon?          @relation(fields: [couponId], references: [id])
+  shipping Shipping?        @relation(fields: [shippingId], references: [id])
   items    OrderItem[]
+  delivery DigitalDelivery?
 
   @@unique([tenantId, orderNumber])
   @@index([tenantId, createdAt])
@@ -946,4 +976,87 @@ model Subscription {
 
   @@index([tenantId])
   @@map("subscriptions")
+}
+
+/// A private file sold with a digital product (the book, a bonus). `storageKey` is an object key
+/// in the private digital bucket; it is never exposed, only redeemed through a download grant.
+model DigitalAsset {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  productId   String   @map("product_id") @db.Uuid
+  label       String
+  fileName    String   @map("file_name")
+  storageKey  String   @map("storage_key")
+  contentType String   @map("content_type")
+  sizeBytes   Int      @map("size_bytes")
+  sortOrder   Int      @default(0) @map("sort_order")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  product Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  grants  DownloadGrant[]
+
+  @@index([tenantId, productId])
+  @@map("digital_assets")
+}
+
+/// What was delivered for one paid order. One row per order: its unique `orderId` is what makes
+/// "deliver exactly once" a database guarantee when the webhook and the buyer's return race.
+model DigitalDelivery {
+  id            String                @id @default(uuid()) @db.Uuid
+  tenantId      String                @map("tenant_id") @db.Uuid
+  orderId       String                @unique @map("order_id") @db.Uuid
+  status        DigitalDeliveryStatus @default(PENDING)
+  emailAttempts Int                   @default(0) @map("email_attempts")
+  lastError     String?               @map("last_error")
+  sentAt        DateTime?             @map("sent_at")
+  revokedAt     DateTime?             @map("revoked_at")
+  revokedReason String?               @map("revoked_reason")
+  createdAt     DateTime              @default(now()) @map("created_at")
+  updatedAt     DateTime              @updatedAt @map("updated_at")
+
+  order  Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  grants DownloadGrant[]
+
+  @@index([tenantId, status])
+  @@map("digital_deliveries")
+}
+
+/// A signed, expiring, download-limited link to one asset. Only the SHA-256 of the token is stored.
+model DownloadGrant {
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  deliveryId    String    @map("delivery_id") @db.Uuid
+  assetId       String    @map("asset_id") @db.Uuid
+  tokenHash     String    @unique @map("token_hash")
+  expiresAt     DateTime  @map("expires_at")
+  maxDownloads  Int       @map("max_downloads")
+  downloadCount Int       @default(0) @map("download_count")
+  revokedAt     DateTime? @map("revoked_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  delivery DigitalDelivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  asset    DigitalAsset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([deliveryId])
+  @@map("download_grants")
+}
+
+/// Price changes planned ahead (launch price until a date, regular price after). A sweep copies
+/// each due row into `Product.price`, so every reader (storefront, quotes, orders) keeps using one column.
+model ProductPriceSchedule {
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  productId     String    @map("product_id") @db.Uuid
+  price         Decimal   @db.Decimal(12, 2)
+  effectiveFrom DateTime  @map("effective_from")
+  /// Set when the sweep copied `price` into Product.price; null while it is still in the future.
+  appliedAt     DateTime? @map("applied_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, effectiveFrom])
+  @@index([tenantId])
+  @@map("product_price_schedules")
 }

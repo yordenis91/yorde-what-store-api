@@ -12,3 +12,6 @@ export const EMAIL_JOB_OPTIONS = {
   attempts: 3,
   backoff: { type: 'exponential' as const, delay: 10_000 },
 };
+
+/** Digital delivery emails plus the sweeps around them (retry unsent deliveries, apply scheduled prices). */
+export const DIGITAL_DELIVERY_QUEUE = 'digital-delivery';

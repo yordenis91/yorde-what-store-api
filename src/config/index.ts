@@ -81,6 +81,38 @@ export const mercadoPagoConfig = registerAs('mercadoPago', () => ({
 }));
 
 /**
+ * The platform's PayPal account (Orders v2). Like MercadoPago, every PayPal charge, webhook
+ * verification and refund goes through it; stores cannot bring their own credentials. The secret
+ * never leaves the server. `mode` picks the API host: sandbox (default) or live.
+ */
+export const paypalConfig = registerAs('paypal', () => {
+  const mode = process.env.PAYPAL_MODE === 'live' ? 'live' : 'sandbox';
+  return {
+    clientId: process.env.PAYPAL_CLIENT_ID,
+    clientSecret: process.env.PAYPAL_CLIENT_SECRET,
+    webhookId: process.env.PAYPAL_WEBHOOK_ID,
+    mode,
+    baseUrl: mode === 'live' ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com',
+  };
+});
+
+/**
+ * Private object storage for digital products (the book, bonus files) and the rules for the
+ * download links sent to buyers. Any S3-compatible service works (MinIO here); the bucket must
+ * NOT be public: files are only ever reached through a download grant.
+ */
+export const digitalConfig = registerAs('digital', () => ({
+  s3Endpoint: process.env.DIGITAL_S3_ENDPOINT,
+  s3Bucket: process.env.DIGITAL_S3_BUCKET,
+  s3Region: process.env.DIGITAL_S3_REGION ?? 'us-east-1',
+  s3AccessKeyId: process.env.DIGITAL_S3_ACCESS_KEY_ID,
+  s3SecretAccessKey: process.env.DIGITAL_S3_SECRET_ACCESS_KEY,
+  linkTtlDays: Number(process.env.DIGITAL_LINK_TTL_DAYS ?? 7),
+  maxDownloads: Number(process.env.DIGITAL_MAX_DOWNLOADS ?? 5),
+  maxFileMb: Number(process.env.DIGITAL_MAX_FILE_MB ?? 50),
+}));
+
+/**
  * Legacy platform-wide fallback SMTP. Since Módulo 8 (Configuración Global de
  * Plataforma / PlatformSettings), these vars are read exactly once — by
  * PlatformSettingsService, to seed its DB row the first time the app boots

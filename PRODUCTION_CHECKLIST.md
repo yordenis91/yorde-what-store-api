@@ -72,6 +72,8 @@ openssl rand -hex 32
       se envían (solo se registra el asunto en el log).
 - [ ] `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`; y `STRIPE_BILLING_WEBHOOK_SECRET` si cobras planes con tarjeta.
 - [ ] `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_WEBHOOK_SECRET` (ver apartado 5).
+- [ ] `PAYPAL_MODE=live`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_WEBHOOK_ID` (ver apartado 5 y [`PAYPAL_DIGITAL.md`](PAYPAL_DIGITAL.md)).
+- [ ] Si vendes productos digitales: `DIGITAL_S3_*` apuntando a un bucket **privado** (ver [`PAYPAL_DIGITAL.md`](PAYPAL_DIGITAL.md)).
 - [ ] `SENTRY_DSN` (opcional, pero sin él los errores 5xx solo quedan en los logs).
 - [ ] `BACKUP_*` completo (si falta una pieza, los backups quedan desactivados con un aviso).
 - [ ] `PLATFORM_DEFAULT_COMMISSION_RATE` revisado.
@@ -108,6 +110,16 @@ openssl rand -hex 32
       la plataforma**; las tiendas no pueden poner su propio token. El dinero cae en tu cuenta y **la API no liquida
       a las tiendas**: define cómo se les paga y cómo se aplica la comisión, y que el saldo cubra los reembolsos.
 - [ ] Un pago de prueba confirma el pedido y un reembolso desde el panel devuelve el dinero.
+
+### PayPal
+
+- [ ] Webhook en el panel de PayPal (app **Live**) → `https://<api>/api/v1/payments/paypal/webhook` con los eventos
+      `CHECKOUT.ORDER.APPROVED`, `PAYMENT.CAPTURE.COMPLETED`, `PAYMENT.CAPTURE.DENIED`, `PAYMENT.CAPTURE.REFUNDED`,
+      `PAYMENT.CAPTURE.REVERSED`, `CUSTOMER.DISPUTE.CREATED` y `CUSTOMER.DISPUTE.RESOLVED`; su *Webhook ID* en `PAYPAL_WEBHOOK_ID`.
+      Sin él la API rechaza todos los webhooks.
+- [ ] Como MercadoPago, **todo el dinero cae en la cuenta de la plataforma** (las tiendas no traen credenciales propias).
+- [ ] Una compra de prueba (1 USD) termina en `PAID`, se entrega, y el reembolso desde *Compradores* devuelve el dinero.
+      Guion completo en [`PAYPAL_DIGITAL.md`](PAYPAL_DIGITAL.md#11-prueba-en-vivo-1-usd-con-reembolso).
 
 ### Reembolsos automáticos
 

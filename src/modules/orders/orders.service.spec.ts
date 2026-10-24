@@ -11,6 +11,7 @@ import { OrderQueryDto } from './dto';
 import { OrderEvent, OrderEventsService } from './order-events.service';
 import { PaymentsService } from '../payments/payments.service';
 import { PlansService } from '../plans/plans.service';
+import { DigitalService } from '../digital/digital.service';
 
 /**
  * These run against a hand-built Prisma double rather than a database. That
@@ -155,6 +156,7 @@ async function buildService(
       { provide: getQueueToken(ORDER_NOTIFICATION_QUEUE), useValue: { add: jest.fn() } },
       { provide: getQueueToken(EMAIL_QUEUE), useValue: emailQueue },
       { provide: PaymentsService, useValue: { refundOrderPayment: jest.fn(), ...paymentsService } },
+      { provide: DigitalService, useValue: { revokeForOrder: jest.fn() } },
       {
         provide: PlansService,
         useValue: { getEntitlements: jest.fn().mockResolvedValue({ fulfillmentMethods: allowedMethods }) },

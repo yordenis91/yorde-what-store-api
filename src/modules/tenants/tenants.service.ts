@@ -57,6 +57,7 @@ export class TenantsService {
         bannerUrl: true,
         theme: true,
         tracksInventory: true,
+        catalogType: true,
         currency: true,
         currencySymbol: true,
         currencySymbolPosition: true,
@@ -96,7 +97,7 @@ export class TenantsService {
         }),
       this.prisma.withTenant(tenant.id, (tx) =>
         tx.tenantPaymentSetting.findMany({
-          where: { tenantId: tenant.id, isEnabled: true, provider: { in: ['STRIPE', 'MERCADOPAGO'] } },
+          where: { tenantId: tenant.id, isEnabled: true, provider: { in: ['STRIPE', 'MERCADOPAGO', 'PAYPAL'] } },
           select: { provider: true },
         }),
       ),
@@ -115,6 +116,7 @@ export class TenantsService {
       ZELLE: Boolean(zellePaymentInfo),
       STRIPE: enabledGateways.some((g) => g.provider === 'STRIPE'),
       MERCADOPAGO: enabledGateways.some((g) => g.provider === 'MERCADOPAGO'),
+      PAYPAL: enabledGateways.some((g) => g.provider === 'PAYPAL'),
     };
     const checkoutMethods = allowed.filter((m) => configured[m]);
 
@@ -156,6 +158,7 @@ export class TenantsService {
       data: {
         name: dto.name,
         slug: dto.slug,
+        ...(dto.catalogType && { catalogType: dto.catalogType }),
         ownerId: userId,
         members: { create: { userId, role: 'OWNER' } },
         ...(freePlan && { subscriptions: { create: { planId: freePlan.id, status: 'ACTIVE' } } }),
@@ -192,6 +195,26 @@ export class TenantsService {
     }
     if (dto.telegramEnabled === true && !previous?.telegramEnabled) {
       await this.plansService.assertFulfillmentMethodAllowed(tenantId, 'TELEGRAM');
+    }
+    // One kind of product per store. Switching it is only possible while the catalog is empty:
+    // a store with products already is physical or digital for good, never a mix.
+    if (dto.catalogType !== undefined || dto.tracksInventory === true) {
+      const current = await this.prisma.db.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: { catalogType: true },
+      });
+      const next = dto.catalogType ?? current.catalogType;
+      if (dto.catalogType !== undefined && dto.catalogType !== current.catalogType) {
+        if ((await this.prisma.db.product.count({ where: { tenantId } })) > 0) {
+          throw new ConflictException('The catalog type cannot change once the store has products');
+        }
+      }
+      // Digital files have no stock to count; keeping the switch off keeps order creation and
+      // cancellation from disagreeing about whether stock was taken.
+      if (next === 'DIGITAL') {
+        if (dto.tracksInventory === true) throw new BadRequestException('A digital store has no inventory to track');
+        data.tracksInventory = false;
+      }
     }
     const tenant = await this.prisma.db.tenant.update({ where: { id: tenantId }, data: data as any });
 
@@ -232,15 +255,20 @@ export class TenantsService {
     const select = { id: true, provider: true, isEnabled: true, createdAt: true, updatedAt: true } as const;
     const { credentials } = dto;
 
-    // MercadoPago is charged through the platform's own account (its webhook is
-    // signed with the platform secret, so a tenant's own token could never be
-    // confirmed). There is nothing for a tenant to configure beyond the switch.
-    if (dto.provider === 'MERCADOPAGO') {
+    // MercadoPago and PayPal are charged through the platform's own account (their webhooks are
+    // signed with the platform's secret, so a tenant's own token could never be confirmed).
+    // There is nothing for a tenant to configure beyond the switch.
+    if (dto.provider === 'MERCADOPAGO' || dto.provider === 'PAYPAL') {
+      const label = dto.provider === 'PAYPAL' ? 'PayPal' : 'MercadoPago';
       if (credentials !== undefined) {
-        throw new BadRequestException('MercadoPago uses the platform account; per-store credentials are not accepted');
+        throw new BadRequestException(`${label} uses the platform account; per-store credentials are not accepted`);
       }
-      if (dto.isEnabled && !this.config.get<string>('mercadoPago.accessToken')) {
-        throw new BadRequestException('MercadoPago is not available on this platform');
+      const platformConfigured =
+        dto.provider === 'PAYPAL'
+          ? this.config.get<string>('paypal.clientId') && this.config.get<string>('paypal.clientSecret')
+          : this.config.get<string>('mercadoPago.accessToken');
+      if (dto.isEnabled && !platformConfigured) {
+        throw new BadRequestException(`${label} is not available on this platform`);
       }
       if (dto.isEnabled && !existing?.isEnabled) {
         await this.plansService.assertFulfillmentMethodAllowed(tenantId, dto.provider);
@@ -298,11 +326,11 @@ export class TenantsService {
    */
   async getDecryptedCredentials(
     tenantId: string,
-    provider: 'STRIPE' | 'MERCADOPAGO' | 'ZELLE',
+    provider: 'STRIPE' | 'MERCADOPAGO' | 'PAYPAL' | 'ZELLE',
     client: Pick<Prisma.TransactionClient, 'tenantPaymentSetting'> = this.prisma.db,
   ) {
     // Charged through the platform account — a tenant has no credentials of its own.
-    if (provider === 'MERCADOPAGO') return null;
+    if (provider === 'MERCADOPAGO' || provider === 'PAYPAL') return null;
     const setting = await client.tenantPaymentSetting.findUnique({
       where: { tenantId_provider: { tenantId, provider: provider as any } },
     });

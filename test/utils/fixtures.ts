@@ -11,11 +11,16 @@ import { PrismaService } from '../../src/prisma/prisma.service';
  * aren't testing plans, so every channel is unlocked through limitsOverride —
  * the same knob a Super Admin uses — unless a test passes its own.
  */
-const ALL_CHANNELS = ['WHATSAPP', 'TELEGRAM', 'STRIPE', 'MERCADOPAGO', 'ZELLE'];
+const ALL_CHANNELS = ['WHATSAPP', 'TELEGRAM', 'STRIPE', 'MERCADOPAGO', 'ZELLE', 'PAYPAL'];
 
 export async function seedTenant(
   prisma: PrismaService,
-  overrides: { slug: string; tracksInventory?: boolean; fulfillmentMethods?: string[] },
+  overrides: {
+    slug: string;
+    tracksInventory?: boolean;
+    fulfillmentMethods?: string[];
+    catalogType?: 'PHYSICAL' | 'DIGITAL';
+  },
 ) {
   const owner = await prisma.user.create({
     data: { email: `${overrides.slug}-owner@test.com`, passwordHash: 'x', name: 'Owner' },
@@ -26,6 +31,7 @@ export async function seedTenant(
       slug: overrides.slug,
       ownerId: owner.id,
       tracksInventory: overrides.tracksInventory ?? false,
+      ...(overrides.catalogType && { catalogType: overrides.catalogType }),
       limitsOverride: { fulfillmentMethods: overrides.fulfillmentMethods ?? ALL_CHANNELS },
       members: { create: { userId: owner.id, role: 'OWNER' } },
     },

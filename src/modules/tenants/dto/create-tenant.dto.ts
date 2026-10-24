@@ -1,4 +1,5 @@
-import { IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsEnum, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { CatalogType } from '@prisma/client';
 
 export class CreateTenantDto {
   @IsString()
@@ -11,4 +12,9 @@ export class CreateTenantDto {
   @MinLength(2)
   @MaxLength(60)
   slug: string;
+
+  /** PHYSICAL (default) or DIGITAL. A store sells one kind or the other, never both. */
+  @IsOptional()
+  @IsEnum(CatalogType)
+  catalogType?: CatalogType;
 }

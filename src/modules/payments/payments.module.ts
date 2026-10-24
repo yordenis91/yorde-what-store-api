@@ -4,13 +4,15 @@ import { PaymentsController, StorefrontPaymentsController } from './payments.con
 import { PaymentsService } from './payments.service';
 import { StripeAdapter } from './adapters/stripe.adapter';
 import { MercadoPagoAdapter } from './adapters/mercadopago.adapter';
+import { PayPalAdapter } from './adapters/paypal.adapter';
+import { DigitalModule } from '../digital/digital.module';
 import { TenantsModule } from '../tenants/tenants.module';
 import { INVOICE_PDF_QUEUE } from '../../queue/queue.constants';
 
 @Module({
-  imports: [TenantsModule, BullModule.registerQueue({ name: INVOICE_PDF_QUEUE })],
+  imports: [TenantsModule, DigitalModule, BullModule.registerQueue({ name: INVOICE_PDF_QUEUE })],
   controllers: [PaymentsController, StorefrontPaymentsController],
-  providers: [PaymentsService, StripeAdapter, MercadoPagoAdapter],
+  providers: [PaymentsService, StripeAdapter, MercadoPagoAdapter, PayPalAdapter],
   exports: [PaymentsService],
 })
 export class PaymentsModule {}
