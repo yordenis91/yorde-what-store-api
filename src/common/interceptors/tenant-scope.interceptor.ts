@@ -4,6 +4,7 @@ import { Reflector } from '@nestjs/core';
 import { Observable, from } from 'rxjs';
 import { lastValueFrom } from 'rxjs';
 import { PrismaService } from '../../prisma/prisma.service';
+import { SKIP_TENANT_SCOPE_KEY } from '../decorators/skip-tenant-scope.decorator';
 import { withAfterCommit } from '../../prisma/after-commit';
 import { tenantContextStorage } from '../../prisma/tenant-context';
 import { TenantRequest } from '../middleware/tenant.middleware';
@@ -15,6 +16,8 @@ import { TenantRequest } from '../middleware/tenant.middleware';
  * services issue through `PrismaService.db` to that tenant. Requests without
  * a resolved tenant pass through untouched (RLS then default-denies
  * tenant-scoped tables, which is the safe default).
+ *
+ * Handlers marked `@SkipTenantScope()` are exempt too (see that decorator).
  *
  * `@Sse()` handlers are exempt: their observable stays open for the life of
  * the connection (the admin order-events stream is held open for as long as
@@ -34,7 +37,11 @@ export class TenantScopeInterceptor implements NestInterceptor {
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     const req = context.switchToHttp().getRequest<TenantRequest>();
     const isSse = this.reflector.get<boolean>(SSE_METADATA, context.getHandler());
-    if (!req.tenantId || isSse) {
+    const skipScope = this.reflector.getAllAndOverride<boolean>(SKIP_TENANT_SCOPE_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (!req.tenantId || isSse || skipScope) {
       return next.handle();
     }
 

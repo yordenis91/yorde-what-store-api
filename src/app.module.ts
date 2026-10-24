@@ -16,6 +16,8 @@ import {
   redisConfig,
   stripeConfig,
   mercadoPagoConfig,
+  paypalConfig,
+  digitalConfig,
   mailConfig,
   totpConfig,
   securityConfig,
@@ -40,6 +42,7 @@ import { CategoryTemplatesModule } from './modules/category-templates/category-t
 import { OrdersModule } from './modules/orders/orders.module';
 import { PreviewModule } from './modules/preview/preview.module';
 import { PaymentsModule } from './modules/payments/payments.module';
+import { DigitalModule } from './modules/digital/digital.module';
 import { PlansModule } from './modules/plans/plans.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { UsersModule } from './modules/users/users.module';
@@ -72,6 +75,8 @@ import { AppService } from './app.service';
         redisConfig,
         stripeConfig,
         mercadoPagoConfig,
+        paypalConfig,
+        digitalConfig,
         mailConfig,
         totpConfig,
         securityConfig,
@@ -123,6 +128,7 @@ import { AppService } from './app.service';
     OrdersModule,
     PreviewModule,
     PaymentsModule,
+    DigitalModule,
     PlansModule,
     BillingModule,
     UsersModule,

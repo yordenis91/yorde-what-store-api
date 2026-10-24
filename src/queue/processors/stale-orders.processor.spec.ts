@@ -5,6 +5,7 @@ function buildProcessor(options: {
   stale?: { id: string; tenantId: string }[];
   claimed?: number;
   tracksInventory?: boolean;
+  catalogType?: 'PHYSICAL' | 'DIGITAL';
 }) {
   const updateMany = jest.fn().mockResolvedValue({ count: options.claimed ?? 1 });
   const findUniqueOrThrow = jest.fn().mockResolvedValue({
@@ -20,7 +21,14 @@ function buildProcessor(options: {
   const couponUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
   const tx = {
     order: { updateMany, findUniqueOrThrow },
-    tenant: { findUniqueOrThrow: jest.fn().mockResolvedValue({ tracksInventory: options.tracksInventory ?? true }) },
+    tenant: {
+      findUniqueOrThrow: jest
+        .fn()
+        .mockResolvedValue({
+          tracksInventory: options.tracksInventory ?? true,
+          catalogType: options.catalogType ?? 'PHYSICAL',
+        }),
+    },
     product: { updateMany: productUpdateMany },
     productVariant: { updateMany: variantUpdateMany },
     coupon: { updateMany: couponUpdateMany },
@@ -45,7 +53,7 @@ describe('StaleOrdersProcessor', () => {
     const { processor, findMany } = buildProcessor({});
     await processor.process();
     const where = findMany.mock.calls[0][0].where;
-    expect(where.fulfillmentMethod).toEqual({ in: ['STRIPE', 'MERCADOPAGO'] });
+    expect(where.fulfillmentMethod).toEqual({ in: ['STRIPE', 'MERCADOPAGO', 'PAYPAL'] });
     expect(where).toMatchObject({ status: 'PENDING', paymentStatus: 'PENDING' });
     expect(where.createdAt.lt).toBeInstanceOf(Date);
   });
@@ -72,6 +80,17 @@ describe('StaleOrdersProcessor', () => {
   it('leaves stock alone for a store that does not track inventory', async () => {
     const { processor, productUpdateMany, variantUpdateMany } = buildProcessor({ tracksInventory: false });
     await processor.process();
+    expect(productUpdateMany).not.toHaveBeenCalled();
+    expect(variantUpdateMany).not.toHaveBeenCalled();
+  });
+
+  it('never gives stock back for a digital store, which took none when the order was placed', async () => {
+    const { processor, productUpdateMany, variantUpdateMany, updateMany } = buildProcessor({
+      tracksInventory: true,
+      catalogType: 'DIGITAL',
+    });
+    await processor.process();
+    expect(updateMany).toHaveBeenCalled(); // the abandoned order is still cancelled
     expect(productUpdateMany).not.toHaveBeenCalled();
     expect(variantUpdateMany).not.toHaveBeenCalled();
   });

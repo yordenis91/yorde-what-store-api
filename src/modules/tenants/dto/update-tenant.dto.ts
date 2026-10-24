@@ -1,6 +1,12 @@
-import { IsBoolean, IsInt, IsObject, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsEnum, IsInt, IsObject, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { CatalogType } from '@prisma/client';
 
 export class UpdateTenantDto {
+  /** Only changeable while the store has no products (see TenantsService.update). */
+  @IsOptional()
+  @IsEnum(CatalogType)
+  catalogType?: CatalogType;
+
   @IsOptional()
   @IsString()
   @MaxLength(120)

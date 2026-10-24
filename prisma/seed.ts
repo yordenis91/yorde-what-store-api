@@ -9,7 +9,7 @@ import {
 const prisma = new PrismaClient();
 
 async function main() {
-  const allChannels = ['WHATSAPP', 'TELEGRAM', 'STRIPE', 'MERCADOPAGO', 'ZELLE'] as const;
+  const allChannels = ['WHATSAPP', 'TELEGRAM', 'STRIPE', 'MERCADOPAGO', 'ZELLE', 'PAYPAL'] as const;
   const plans = [
     {
       name: 'Free',

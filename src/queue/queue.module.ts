@@ -3,6 +3,7 @@ import { BullModule, InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import {
   BACKUP_QUEUE,
+  DIGITAL_DELIVERY_QUEUE,
   EMAIL_QUEUE,
   INVENTORY_SYNC_QUEUE,
   INVOICE_PDF_QUEUE,
@@ -18,6 +19,9 @@ import { OrderNotificationProcessor } from './processors/order-notification.proc
 import { VisitsCleanupProcessor } from './processors/visits-cleanup.processor';
 import { BackupProcessor } from './processors/backup.processor';
 import { StaleOrdersProcessor } from './processors/stale-orders.processor';
+import { DigitalDeliveryProcessor } from './processors/digital-delivery.processor';
+import { APPLY_PRICES_JOB, SWEEP_PENDING_JOB } from '../modules/digital/digital.service';
+import { DigitalModule } from '../modules/digital/digital.module';
 import { SubscriptionLifecycleProcessor } from './processors/subscription-lifecycle.processor';
 import { EmailTemplatesModule } from '../modules/email-templates/email-templates.module';
 import { TenantsModule } from '../modules/tenants/tenants.module';
@@ -34,6 +38,7 @@ import { BillingModule } from '../modules/billing/billing.module';
     BackupsModule,
     NotificationsModule,
     BillingModule,
+    DigitalModule,
     BullModule.registerQueue(
       { name: EMAIL_QUEUE },
       { name: INVOICE_PDF_QUEUE },
@@ -43,6 +48,7 @@ import { BillingModule } from '../modules/billing/billing.module';
       { name: BACKUP_QUEUE },
       { name: SUBSCRIPTION_LIFECYCLE_QUEUE },
       { name: STALE_ORDERS_QUEUE },
+      { name: DIGITAL_DELIVERY_QUEUE },
     ),
   ],
   providers: [
@@ -54,13 +60,28 @@ import { BillingModule } from '../modules/billing/billing.module';
     BackupProcessor,
     SubscriptionLifecycleProcessor,
     StaleOrdersProcessor,
+    DigitalDeliveryProcessor,
   ],
 })
 export class QueueModule implements OnModuleInit {
-  constructor(@InjectQueue(STALE_ORDERS_QUEUE) private readonly staleOrdersQueue: Queue) {}
+  constructor(
+    @InjectQueue(STALE_ORDERS_QUEUE) private readonly staleOrdersQueue: Queue,
+    @InjectQueue(DIGITAL_DELIVERY_QUEUE) private readonly digitalQueue: Queue,
+  ) {}
 
   /** Keyed by jobId, so re-running on every boot updates the schedule instead of duplicating it. */
   async onModuleInit() {
     await this.staleOrdersQueue.add('sweep', {}, { repeat: { pattern: '*/15 * * * *' }, jobId: 'stale-orders-sweep' });
+    // Paid-but-unsent deliveries are retried every 5 minutes; scheduled prices are applied each minute.
+    await this.digitalQueue.add(
+      SWEEP_PENDING_JOB,
+      {},
+      { repeat: { pattern: '*/5 * * * *' }, jobId: 'digital-sweep-pending' },
+    );
+    await this.digitalQueue.add(
+      APPLY_PRICES_JOB,
+      {},
+      { repeat: { pattern: '* * * * *' }, jobId: 'digital-apply-prices' },
+    );
   }
 }

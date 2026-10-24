@@ -42,10 +42,20 @@ export class EmailProcessor extends WorkerHost {
   }
 
   async process(job: Job<EmailJobData>): Promise<void> {
-    const { templateKey, tenantId, locale, to, variables, viaPlatform } = job.data;
+    await this.deliver(job.data, job.name);
+  }
+
+  /**
+   * The actual send, callable outside the email queue by flows that must know whether it worked
+   * (digital delivery records "sent" or "failed" on the order, so it cannot fire and forget).
+   * Resolves false when nothing left the building (no recipient, no SMTP configured): the queue
+   * path treats that as done, as it always has, but a paid book must not be marked delivered.
+   */
+  async deliver(data: EmailJobData, source = 'direct'): Promise<boolean> {
+    const { templateKey, tenantId, locale, to, variables, viaPlatform } = data;
     if (!to) {
-      this.logger.warn(`Email job [${job.name}] has no recipient, skipping`);
-      return;
+      this.logger.warn(`Email job [${source}] has no recipient, skipping`);
+      return false;
     }
 
     // Platform → store owner mail (plan billing) is the platform speaking, so
@@ -71,7 +81,7 @@ export class EmailProcessor extends WorkerHost {
       // The body can carry a reset link or temporary password: only echo it in local development.
       const echoBody = process.env.NODE_ENV === 'development' ? `:\n${body}` : ' (body omitted)';
       this.logger.log(`[no SMTP configured] Would send "${subject}" to ${to}${echoBody}`);
-      return;
+      return false;
     }
 
     // Tenant SMTP settings are tenant-controlled, so the target is vetted (and
@@ -89,6 +99,7 @@ export class EmailProcessor extends WorkerHost {
 
     await transporter.sendMail({ from, to, subject, text: body });
     this.logger.log(`Sent "${subject}" to ${to}${tenantSmtp ? ' via tenant SMTP' : ''}`);
+    return true;
   }
 
   /**
