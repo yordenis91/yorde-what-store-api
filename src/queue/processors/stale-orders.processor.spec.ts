@@ -22,12 +22,10 @@ function buildProcessor(options: {
   const tx = {
     order: { updateMany, findUniqueOrThrow },
     tenant: {
-      findUniqueOrThrow: jest
-        .fn()
-        .mockResolvedValue({
-          tracksInventory: options.tracksInventory ?? true,
-          catalogType: options.catalogType ?? 'PHYSICAL',
-        }),
+      findUniqueOrThrow: jest.fn().mockResolvedValue({
+        tracksInventory: options.tracksInventory ?? true,
+        catalogType: options.catalogType ?? 'PHYSICAL',
+      }),
     },
     product: { updateMany: productUpdateMany },
     productVariant: { updateMany: variantUpdateMany },
