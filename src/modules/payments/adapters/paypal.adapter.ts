@@ -145,8 +145,11 @@ export class PayPalAdapter implements PaymentAdapter {
   ): Promise<CreateCheckoutResult> {
     const value = paypalAmountValue(ctx.grandTotal, ctx.currency);
     const order = await this.request('POST', '/v2/checkout/orders', {
-      // Same order + same amount = same PayPal order, so a double click cannot open two.
-      requestId: `create-${ctx.orderId}-${value}-${ctx.currency.toUpperCase()}`,
+      // Same order + same amount within the hour = same PayPal order, so a double click cannot open two.
+      // The hour matters: PayPal remembers a request id for days, and an order a buyer abandoned has
+      // long expired by the time they come back, so paying again must open a fresh one. Only the
+      // latest PayPal order is bound to the order (paypalOrderId); an older one can never settle it.
+      requestId: `create-${ctx.orderId}-${value}-${ctx.currency.toUpperCase()}-${Math.floor(Date.now() / 3_600_000)}`,
       body: {
         intent: 'CAPTURE',
         purchase_units: [

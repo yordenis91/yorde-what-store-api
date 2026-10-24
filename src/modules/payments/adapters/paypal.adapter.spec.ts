@@ -110,6 +110,29 @@ describe('PayPalAdapter', () => {
       expect(keys[2]).not.toBe(keys[0]);
     });
 
+    it('opens a fresh PayPal order when the buyer comes back hours later', async () => {
+      jest
+        .useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] })
+        .setSystemTime(new Date('2026-10-30T12:00:00Z'));
+      try {
+        const calls = mockFetch({
+          ...TOKEN,
+          'POST /v2/checkout/orders': { body: { id: 'PP-1', links: [{ rel: 'approve', href: 'u' }] } },
+        });
+        const adapter = buildAdapter();
+        await adapter.createCheckout(ctx, null, urls);
+        jest.setSystemTime(new Date('2026-10-30T12:20:00Z'));
+        await adapter.createCheckout(ctx, null, urls); // same hour: same key
+        jest.setSystemTime(new Date('2026-10-30T15:00:00Z'));
+        await adapter.createCheckout(ctx, null, urls); // three hours later: new key
+        const keys = calls.filter((c) => c.path === '/v2/checkout/orders').map((c) => c.headers['PayPal-Request-Id']);
+        expect(keys[0]).toBe(keys[1]);
+        expect(keys[2]).not.toBe(keys[0]);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
     it('fails when PayPal returns no approval link', async () => {
       mockFetch({ ...TOKEN, 'POST /v2/checkout/orders': { body: { id: 'PP-1', links: [] } } });
       await expect(buildAdapter().createCheckout(ctx, null, urls)).rejects.toBeInstanceOf(PayPalApiError);
