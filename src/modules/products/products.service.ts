@@ -5,6 +5,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PaginatedResult } from '../../common/dto/pagination.dto';
 import { CategoryTemplatesService } from '../category-templates/category-templates.service';
 import { PlansService } from '../plans/plans.service';
+import { DigitalService } from '../digital/digital.service';
 import { deleteUploadedFile } from '../uploads/uploads.util';
 import {
   CreateProductDto,
@@ -35,6 +36,7 @@ export class ProductsService {
     private readonly prisma: PrismaService,
     private readonly categoryTemplatesService: CategoryTemplatesService,
     private readonly plansService: PlansService,
+    private readonly digital: DigitalService,
   ) {}
 
   async create(tenantId: string, dto: CreateProductDto) {
@@ -201,7 +203,9 @@ export class ProductsService {
 
   async remove(tenantId: string, id: string) {
     await this.findOne(tenantId, id);
+    const storedFiles = await this.digital.filesForProductDeletion(tenantId, id);
     await this.prisma.db.product.delete({ where: { id } });
+    this.digital.removeStoredFiles(storedFiles);
     return { deleted: true };
   }
 

@@ -1,8 +1,9 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PlansService } from '../plans/plans.service';
 import { CategoryTemplatesService } from '../category-templates/category-templates.service';
 import { deleteUploadedFile } from '../uploads/uploads.util';
+import { DigitalService } from '../digital/digital.service';
 import { ProductsService } from './products.service';
 import { CreateProductDto } from './dto';
 
@@ -22,7 +23,7 @@ function buildService(options: { productCount?: number; plan?: { maxProducts: nu
   } as unknown as PlansService;
   const categoryTemplatesService = {} as CategoryTemplatesService;
 
-  const service = new ProductsService(prisma, categoryTemplatesService, plansService);
+  const service = new ProductsService(prisma, categoryTemplatesService, plansService, {} as DigitalService);
   return { service, create, count, executeRaw };
 }
 
@@ -59,7 +60,7 @@ function buildImageService(options: { images?: { id: string; url?: string }[] })
       },
     },
   } as unknown as PrismaService;
-  const service = new ProductsService(prisma, {} as CategoryTemplatesService, {} as PlansService);
+  const service = new ProductsService(prisma, {} as CategoryTemplatesService, {} as PlansService, {} as DigitalService);
   return { service, findMany, update, aggregate, create, imageFindFirst, deleteImage };
 }
 
@@ -173,5 +174,36 @@ describe('ProductsService.reorderImages', () => {
       service.reorderImages(TENANT_ID, PRODUCT_ID, { imageIds: ['img-1', 'img-2', 'someone-elses-image'] }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe('ProductsService.remove — digital files', () => {
+  function build(options: { dependants?: boolean }) {
+    const deleteProduct = jest.fn().mockResolvedValue({});
+    const prisma = {
+      db: { product: { findFirst: jest.fn().mockResolvedValue({ id: PRODUCT_ID }), delete: deleteProduct } },
+    } as unknown as PrismaService;
+    const filesForProductDeletion = jest.fn().mockImplementation(async () => {
+      if (options.dependants) throw new ConflictException('has orders');
+      return ['t/a.pdf', 't/b.pdf'];
+    });
+    const removeStoredFiles = jest.fn();
+    const digital = { filesForProductDeletion, removeStoredFiles } as unknown as DigitalService;
+    const service = new ProductsService(prisma, {} as CategoryTemplatesService, {} as PlansService, digital);
+    return { service, deleteProduct, removeStoredFiles };
+  }
+
+  it('deletes the product and then its stored files', async () => {
+    const { service, deleteProduct, removeStoredFiles } = build({});
+    await service.remove(TENANT_ID, PRODUCT_ID);
+    expect(deleteProduct).toHaveBeenCalledWith({ where: { id: PRODUCT_ID } });
+    expect(removeStoredFiles).toHaveBeenCalledWith(['t/a.pdf', 't/b.pdf']);
+  });
+
+  it('refuses to delete a product whose buyers depend on its files, and removes nothing', async () => {
+    const { service, deleteProduct, removeStoredFiles } = build({ dependants: true });
+    await expect(service.remove(TENANT_ID, PRODUCT_ID)).rejects.toBeInstanceOf(ConflictException);
+    expect(deleteProduct).not.toHaveBeenCalled();
+    expect(removeStoredFiles).not.toHaveBeenCalled();
   });
 });
