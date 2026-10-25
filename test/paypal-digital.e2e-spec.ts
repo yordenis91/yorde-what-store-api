@@ -638,6 +638,34 @@ describe('PayPal and digital products (e2e)', () => {
 
   // ── the digital store's own rules ──────────────────────────────────────
 
+  describe('deleting a digital product', () => {
+    it('keeps a product that was sold: its buyers keep their downloads and can be re-sent them', async () => {
+      const { tenant, product, token } = await seedBookStore();
+      const orderId = await buy(tenant.id, product.id);
+      await waitForSent(tenant.id, orderId);
+      const [bookToken] = linksFromEmail(deliveryEmails()[0]);
+      const remove = jest.spyOn(DigitalStorageService.prototype, 'remove').mockResolvedValue(undefined);
+
+      await http().delete(`/api/v1/products/${product.id}`).set(admin(token, tenant.id)).expect(409);
+
+      expect(remove).not.toHaveBeenCalled();
+      await http().get(`/api/v1/downloads/${bookToken}`).expect(302);
+      await http().post(`/api/v1/digital/buyers/${orderId}/resend`).set(admin(token, tenant.id)).expect(201);
+    });
+
+    it('deletes an unsold product together with its files in storage', async () => {
+      const { tenant, product, token } = await seedBookStore();
+      const remove = jest.spyOn(DigitalStorageService.prototype, 'remove').mockResolvedValue(undefined);
+
+      await http().delete(`/api/v1/products/${product.id}`).set(admin(token, tenant.id)).expect(200);
+
+      await waitFor(async () => remove.mock.calls.length === 2, 'storage cleanup');
+      expect(remove.mock.calls.map((c) => c[0]).sort()).toEqual([`${tenant.id}/bonus`, `${tenant.id}/book`]);
+      const left = await prisma.withRlsBypass((tx) => tx.digitalAsset.count({ where: { tenantId: tenant.id } }));
+      expect(left).toBe(0);
+    });
+  });
+
   describe('digital store rules', () => {
     it('needs an email to deliver to', async () => {
       const { tenant, product } = await seedBookStore();

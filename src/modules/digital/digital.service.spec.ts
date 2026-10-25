@@ -447,3 +447,43 @@ describe('DigitalService.addAsset', () => {
     expect(storage.remove).not.toHaveBeenCalled();
   });
 });
+
+describe('DigitalService product deletion', () => {
+  const db = (assets: { storageKey: string }[], dependants: number) => ({
+    digitalAsset: { findMany: jest.fn().mockResolvedValue(assets) },
+    orderItem: { count: jest.fn().mockResolvedValue(dependants) },
+  });
+
+  it('returns the storage keys of an unsold product so they can be removed', async () => {
+    const keys = await build({ db: db([{ storageKey: 'a' }, { storageKey: 'b' }], 0) }).service.filesForProductDeletion(
+      TENANT,
+      'p1',
+    );
+    expect(keys).toEqual(['a', 'b']);
+  });
+
+  it('refuses while a delivered or open order still depends on the files', async () => {
+    const d = db([{ storageKey: 'a' }], 1);
+    await expect(build({ db: d }).service.filesForProductDeletion(TENANT, 'p1')).rejects.toThrow(ConflictException);
+    // The check counts deliveries and open orders, never cancelled/refunded ones without a delivery.
+    expect(d.orderItem.count.mock.calls[0][0].where.order.OR).toEqual([
+      { delivery: { isNot: null } },
+      { status: { in: ['PENDING', 'CONFIRMED', 'PROCESSING'] } },
+    ]);
+  });
+
+  it('does not look at orders for a product with no files', async () => {
+    const d = db([], 5);
+    expect(await build({ db: d }).service.filesForProductDeletion(TENANT, 'p1')).toEqual([]);
+    expect(d.orderItem.count).not.toHaveBeenCalled();
+  });
+
+  it('removes each stored object, and a storage failure does not throw', async () => {
+    const { service, storage } = build();
+    storage.remove.mockRejectedValueOnce(new Error('minio down')).mockResolvedValueOnce(undefined);
+    service.removeStoredFiles(['a', 'b']);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(storage.remove).toHaveBeenCalledWith('a');
+    expect(storage.remove).toHaveBeenCalledWith('b');
+  });
+});

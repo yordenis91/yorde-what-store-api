@@ -375,6 +375,43 @@ export class DigitalService {
     return { deleted: true };
   }
 
+  /**
+   * Called before a product is deleted. Returns the storage keys of its files so the caller can
+   * remove them once the product is gone. Refuses while any buyer still depends on those files:
+   * a delivered or in-flight order would otherwise be left with dead links (the grants go with
+   * the assets), and "resend" could never work again. Unsold products are free to go.
+   */
+  async filesForProductDeletion(tenantId: string, productId: string): Promise<string[]> {
+    const assets = await this.prisma.db.digitalAsset.findMany({
+      where: { tenantId, productId },
+      select: { storageKey: true },
+    });
+    if (assets.length === 0) return [];
+    const dependants = await this.prisma.db.orderItem.count({
+      where: {
+        productId,
+        order: { OR: [{ delivery: { isNot: null } }, { status: { in: ['PENDING', 'CONFIRMED', 'PROCESSING'] } }] },
+      },
+    });
+    if (dependants > 0) {
+      throw new ConflictException(
+        'This product has orders and cannot be deleted: its buyers would lose their downloads. Unpublish it instead.',
+      );
+    }
+    return assets.map((a) => a.storageKey);
+  }
+
+  /** Best-effort removal of objects whose database rows are already gone. */
+  removeStoredFiles(keys: string[]): void {
+    for (const key of keys) {
+      afterCommit(() =>
+        this.storage
+          .remove(key)
+          .catch((err: unknown) => this.logger.warn(`Could not delete object ${key}: ${String(err)}`)),
+      );
+    }
+  }
+
   // ── Scheduled prices ────────────────────────────────────────────────────
 
   listSchedule(tenantId: string, productId: string) {
