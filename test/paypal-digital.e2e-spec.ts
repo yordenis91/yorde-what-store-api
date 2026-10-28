@@ -280,6 +280,8 @@ describe('PayPal and digital products (e2e)', () => {
       const delivery = await waitForSent(tenant.id, orderId);
       expect(delivery.grants).toHaveLength(2);
       expect(deliveryEmails()).toHaveLength(1);
+      // The delivery email is this store's confirmation: no "order confirmed" mail before it was paid.
+      expect(emails.filter((e) => e.templateKey === 'order-confirmation')).toHaveLength(0);
       const [mail] = deliveryEmails();
       expect(mail.to).toBe('bea@example.com');
       expect(mail.variables.download_links).toContain('Los Códigos de Lola');

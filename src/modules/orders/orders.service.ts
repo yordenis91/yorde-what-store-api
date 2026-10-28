@@ -203,6 +203,10 @@ export class OrdersService {
     // that survives losing the confirmation page or the WhatsApp thread.
     const queueConfirmationEmail = async () => {
       if (!order.customerEmail) return;
+      // A digital order is still unpaid here, and "order confirmed" would tell a buyer who walks away
+      // from the payment page that they bought. The delivery email, sent once the payment is
+      // confirmed, is that store's confirmation.
+      if (isDigitalStore) return;
       await this.emailQueue.add(
         'order-confirmation',
         {
