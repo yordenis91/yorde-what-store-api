@@ -205,6 +205,18 @@ describe('PayPalAdapter', () => {
       expect(await buildAdapter().captureOrder('PP-1')).toEqual({ paypalOrderId: 'PP-1', orderStatus: 'NOT_APPROVED' });
     });
 
+    it('reports a refused card as a declined capture, not an error', async () => {
+      mockFetch({
+        ...TOKEN,
+        'POST /v2/checkout/orders/:id/capture': { status: 422, body: { details: [{ issue: 'INSTRUMENT_DECLINED' }] } },
+      });
+      expect(await buildAdapter().captureOrder('PP-1')).toEqual({
+        paypalOrderId: 'PP-1',
+        orderStatus: 'APPROVED',
+        captureStatus: 'DECLINED',
+      });
+    });
+
     it('propagates other PayPal failures', async () => {
       mockFetch({ ...TOKEN, 'POST /v2/checkout/orders/:id/capture': { status: 500, body: { message: 'boom' } } });
       await expect(buildAdapter().captureOrder('PP-1')).rejects.toMatchObject({ status: 500 });
