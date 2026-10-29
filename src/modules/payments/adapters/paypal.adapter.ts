@@ -17,6 +17,9 @@ export class PayPalApiError extends Error {
   }
 }
 
+/** Issues PayPal answers a capture with when the buyer's payment method is refused. */
+const DECLINE_ISSUES = ['INSTRUMENT_DECLINED', 'TRANSACTION_REFUSED'];
+
 /** A PayPal order reduced to what settling a payment needs. */
 export interface PayPalOrderState {
   paypalOrderId: string;
@@ -201,6 +204,10 @@ export class PayPalAdapter implements PaymentAdapter {
       if (err instanceof PayPalApiError && err.issue === 'ORDER_ALREADY_CAPTURED') return this.getOrder(paypalOrderId);
       if (err instanceof PayPalApiError && err.issue === 'ORDER_NOT_APPROVED') {
         return { paypalOrderId, orderStatus: 'NOT_APPROVED' };
+      }
+      // The card or account was refused: a normal outcome the buyer can fix, not a server failure.
+      if (err instanceof PayPalApiError && DECLINE_ISSUES.includes(err.issue ?? '')) {
+        return { paypalOrderId, orderStatus: 'APPROVED', captureStatus: 'DECLINED' };
       }
       throw err;
     }
